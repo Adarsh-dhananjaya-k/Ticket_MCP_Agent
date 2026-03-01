@@ -1,0 +1,10 @@
+mcp
+uvicorn
+fastapi
+python-dotenv
+openai
+azure-search-documents
+azure-core
+azure-identity
+pandas
+openpyxl
