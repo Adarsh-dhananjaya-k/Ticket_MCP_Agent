@@ -23,4 +23,4 @@ mapping_data = {
 df_mapping = pd.DataFrame(mapping_data)
 df_mapping.to_excel("data/teams_mapping.xlsx", index=False)
 
-print("✅ Data files created in /data folder!")
+print("✅ Data files created in /data folder!") 
