@@ -30,7 +30,7 @@ async def run_chat():
             
             messages = [{
                 "role": "system", 
-                "content": "You are IT Support. 1. Ask issue. 2. Call lookup_sla_policy. 3. Call create_ticket. 4. Give Ticket ID."
+                "content": "You are IT Support. 1. Ask issue. 2. Call lookup_sla_policy. 3. Determine the correct Impact (1-3) and Urgency (1-3) from that policy. 4. Call create_ticket. 5. Give Ticket ID."
             }]
 
             while True:
