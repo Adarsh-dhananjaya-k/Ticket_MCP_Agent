@@ -8,3 +8,7 @@ azure-core
 azure-identity
 pandas
 openpyxl
+botbuilder-core
+botbuilder-schema
+botbuilder-integration-aiohttp
+aiohttp
