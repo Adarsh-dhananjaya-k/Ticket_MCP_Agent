@@ -64,6 +64,17 @@ AZURE_OPENAI_DEPLOYMENT="gpt-4o"
 AZURE_SEARCH_ENDPOINT="https://YOUR-SEARCH.search.windows.net"
 AZURE_SEARCH_KEY="your-admin-key"
 AZURE_SEARCH_INDEX_NAME="sla-index"
+
+# ServiceNow (ITSM System)
+SNOW_INSTANCE="devXXXXX.service-now.com"
+SNOW_USER="your-username"
+SNOW_PASSWORD="your-password"
+```
+
+### 4. Verify ServiceNow Connection (Optional)
+You can run a quick check to see if your ServiceNow credentials are correct:
+```bash
+python -m scripts.verify_sn_config
 ```
 
 ### 4. Generate Mock Data
@@ -151,5 +162,5 @@ Use these inputs in the **Chat Agent (Terminal 2)** and watch what happens in th
 *   Make sure **Terminal 1 (Server)** is running before you start the agents.
 
 **3. Worker isn't picking up tickets**
-*   The worker sleeps for 15 seconds between loops. Be patient, or check if the ticket status in `servicenow_mock_db.json` is actually "New".
+*   The worker sleeps for 15 seconds between loops. Ensure the ticket state in ServiceNow is "New" (State Code 1) and that it is "Unassigned".
 
