@@ -118,9 +118,8 @@ async def run_worker():
                
                B. CHECK PRIORITY & ASSIGN:
                   - IF PRIORITY IS '1' (Critical):
-                    i.  Call 'request_manager_approval' using the 'manager_email'.
-                    ii. IF 'Approved': Call 'assign_ticket' using 'agent_email'.
-                    iii. IF 'Rejected': Call 'update_ticket' to add comment: "Manager rejected assignment." (Do NOT assign).
+                    i.  Call 'request_manager_approval' using the 'manager_email', 'ticket_id', 'description', and 'agent_email'.
+                    ii. Once the tool returns "Email sent", STOP processing this ticket and MOVE to the next one. The approval happens asynchronously via email links.
                   
                   - IF PRIORITY IS NOT '1' (High/Med/Low):
                     i.  Directly call 'assign_ticket' using 'agent_email'.

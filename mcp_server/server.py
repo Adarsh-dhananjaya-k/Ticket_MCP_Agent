@@ -4,6 +4,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp_server.tools.sla_policy import lookup_sla
 from mcp_server.tools.roster import find_best_assignee
 from mcp_server.tools.servicenow import create_incident, get_unassigned_tickets, update_incident, test_connection, get_tickets
+from mcp_server.tools.email_service import send_approval_email
 
 mcp = FastMCP("ITSM-System")
 
@@ -58,23 +59,27 @@ def find_assignee(description: str) -> str:
 def assign_ticket(ticket_id: str, email: str) -> str:
     return update_incident(ticket_id, assigned_to=email, status="Assigned")
 
-# --- MOCK APPROVAL TOOL ---
 @mcp.tool()
-def request_manager_approval(manager_email: str, ticket_id: str, reason: str) -> str:
+def request_manager_approval(manager_email: str, ticket_id: str, reason: str, agent_email: str) -> str:
     """
-    DEMO ONLY: Simulates sending an email to the manager.
-    Returns 'Approved' or 'Rejected'.
+    Sends an approval email to the manager.
+    Returns a status message.
     """
-    print(f"\n📧 [DEMO EMAIL SENT]")
-    print(f"   To: {manager_email}")
-    print(f"   Subject: P1 Ticket Approval Needed ({ticket_id})")
-    print(f"   Body: {reason}\n")
+    print(f"📧 Sending approval email to {manager_email} for ticket {ticket_id}")
     
-    # Randomly approve or reject for demo
-    decision = random.choices(["Approved", "Rejected"], weights=[0.8, 0.2], k=1)[0]
+    # We pass 'P1' as priority here since this tool is specifically for P1 tickets in worker logic
+    success = send_approval_email(
+        manager_email=manager_email,
+        ticket_id=ticket_id,
+        priority="1 - Critical",
+        description=reason,
+        agent_email=agent_email
+    )
     
-    print(f"   📩 [MANAGER REPLIED]: {decision}\n")
-    return decision
+    if success:
+        return f"Email sent to {manager_email}. Ticket {ticket_id} is pending manager approval."
+    else:
+        return f"Failed to send approval email to {manager_email}. Check SMTP configuration."
 
 if __name__ == "__main__":
     mcp.run(transport="sse")

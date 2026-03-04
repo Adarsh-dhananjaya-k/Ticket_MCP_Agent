@@ -20,6 +20,8 @@ def _load_data():
             # Normalize strings to avoid mismatch issues
             _df_map["Keyword"] = _df_map["Keyword"].astype(str).str.lower().str.strip()
             _df_map["Target_Team"] = _df_map["Target_Team"].astype(str).str.lower().str.strip()
+            if "Manager_Email" in _df_map.columns:
+                _df_map["Manager_Email"] = _df_map["Manager_Email"].astype(str).str.lower().str.strip()
             
             _df_roster["Team"] = _df_roster["Team"].astype(str).str.lower().str.strip()
             _df_roster["Role"] = _df_roster["Role"].astype(str).str.upper().str.strip()
@@ -92,7 +94,16 @@ def find_best_assignee(issue_description: str) -> dict:
         # Sort values
         best_agent = team_members.sort_values(["Role_Score", "Workload_Score", "Name"]).iloc[0]
 
-        # 5. SUCCESS RETURN
+        # 5. Extract Team-Specific Manager if available
+        manager_email = str(best_agent["Manager_Email"])
+        # Check if the matched team has a specific manager in the mapping
+        if not df_map[df_map["Target_Team"] == target_team].empty:
+            mapping_row = df_map[df_map["Target_Team"] == target_team].iloc[0]
+            if "Manager_Email" in mapping_row and str(mapping_row["Manager_Email"]) != "nan":
+                manager_email = str(mapping_row["Manager_Email"])
+                print(f"📌 Using team-specific manager email from mapping: {manager_email}")
+
+        # 6. SUCCESS RETURN
         return {
             "agent_name":    str(best_agent["Name"]),
             "agent_email":   str(best_agent["Email"]),
@@ -100,7 +111,7 @@ def find_best_assignee(issue_description: str) -> dict:
             "role":          str(best_agent["Role"]),
             "workload":      str(best_agent["Workload"]),
             "manager_name":  str(best_agent["Manager"]),
-            "manager_email": str(best_agent["Manager_Email"]),
+            "manager_email": manager_email,
         }
 
     except Exception as e:

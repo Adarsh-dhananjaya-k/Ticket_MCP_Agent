@@ -77,8 +77,9 @@ from botbuilder.core import (
 from botbuilder.schema import Activity
 from dotenv import load_dotenv
 
-# Import the bot logic
+# Import the bot logic and ServiceNow tools
 from agent.teams_bot import ITSMBot
+from mcp_server.tools.servicenow import update_incident
 
 load_dotenv()
 
@@ -128,10 +129,46 @@ async def messages(req: web.Request) -> web.Response:
         traceback.print_exc()
         return web.Response(status=500)
 
+# --- 6. APPROVAL HANDLERS ---
+async def approve_ticket(req: web.Request) -> web.Response:
+    ticket_id = req.query.get("ticket_id")
+    agent_email = req.query.get("agent_email")
+    
+    if not ticket_id or not agent_email:
+        return web.Response(text="Missing ticket_id or agent_email", status=400)
+    
+    print(f"✅ Manager Approved Ticket {ticket_id}. Assigning to {agent_email}")
+    
+    # Direct update to ServiceNow
+    result = update_incident(ticket_id, assigned_to=agent_email, status="Assigned", comments="Manager approved via email link.")
+    
+    return web.Response(
+        text=f"<h1>Ticket Approved</h1><p>{result}</p><p>Ticket {ticket_id} has been assigned to {agent_email}.</p>",
+        content_type="text/html"
+    )
+
+async def reject_ticket(req: web.Request) -> web.Response:
+    ticket_id = req.query.get("ticket_id")
+    
+    if not ticket_id:
+        return web.Response(text="Missing ticket_id", status=400)
+    
+    print(f"❌ Manager Rejected Ticket {ticket_id}")
+    
+    # Direct update to ServiceNow
+    result = update_incident(ticket_id, status="On Hold", comments="Manager rejected assignment.")
+    
+    return web.Response(
+        text=f"<h1>Ticket Rejected</h1><p>{result}</p><p>Ticket {ticket_id} has been put on hold.</p>",
+        content_type="text/html"
+    )
+
 # --- 6. INITIALIZE WEB APP ---
 # (This was missing in the previous version)
 app = web.Application()
 app.router.add_post("/api/messages", messages)
+app.router.add_get("/approve", approve_ticket)
+app.router.add_get("/reject", reject_ticket)
 
 if __name__ == "__main__":
     try:
