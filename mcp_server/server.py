@@ -59,19 +59,27 @@ def assign_ticket(ticket_id: str, email: str) -> str:
     return update_incident(ticket_id, assigned_to=email, status="Assigned")
 
 # --- MOCK APPROVAL TOOL ---
+import time
+
 @mcp.tool()
 def request_manager_approval(manager_email: str, ticket_id: str, reason: str) -> str:
     """
     DEMO ONLY: Simulates sending an email to the manager.
-    Returns 'Approved' or 'Rejected'.
+    Waits 10 seconds and always returns 'Approved' for the demo video.
     """
     print(f"\n📧 [DEMO EMAIL SENT]")
     print(f"   To: {manager_email}")
     print(f"   Subject: P1 Ticket Approval Needed ({ticket_id})")
     print(f"   Body: {reason}\n")
     
-    # Randomly approve or reject for demo
-    decision = random.choices(["Approved", "Rejected"], weights=[0.8, 0.2], k=1)[0]
+    # Add a visible waiting indicator for the terminal output in the video
+    print(f"   ⏳ Waiting for manager's response.")
+    
+    # Introduce the 10-second delay
+    time.sleep(10) 
+    
+    # Hardcoded to always approve for a smooth demo flow
+    decision = "Approved"
     
     print(f"   📩 [MANAGER REPLIED]: {decision}\n")
     return decision
