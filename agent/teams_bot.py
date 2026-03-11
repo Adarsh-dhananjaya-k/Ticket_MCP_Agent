@@ -180,6 +180,9 @@ class ITSMBot(ActivityHandler):
                    - User says a ticket is fixed/resolved.
                    - Call 'update_incident' (or update tool).
                    - If Ticket ID is missing, ask for it.
+                3. WHEN ASSIGNING OR REQUESTING APPROVAL:
+                   - Always call 'find_assignee' first to get agent plus assignment_group.
+                   - When you call 'assign_ticket' or 'request_manager_approval', include the 'assignment_group' from 'find_assignee'.
                 """
             })
 

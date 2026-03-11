@@ -123,6 +123,7 @@ async def run_worker():
                   
                   - IF PRIORITY IS NOT '1' (High/Med/Low):
                     i.  Directly call 'assign_ticket' using 'agent_email'.
+                  - For BOTH cases always include the 'assignment_group' returned by 'find_assignee' when calling 'assign_ticket' or 'request_manager_approval'.
             
             3. If the tool says "User not found", add a comment to the ticket stating the error.
             """
@@ -145,16 +146,71 @@ async def run_worker():
                         messages.append(msg)
                         for tool in msg.tool_calls:
                             t_name = tool.function.name
-                            t_args = json.loads(tool.function.arguments)
-                            print(f"   ⚙️ Tool: {t_name} | Args: {t_args}")
-                            
-                            result = await session.call_tool(t_name, arguments=t_args)
-                            
-                            # Print tool output for debugging
-                            output_text = result.content[0].text
-                            # Truncate long outputs for display
+                            raw_args = json.loads(tool.function.arguments)
+
+                            # Normalize argument keys (LLM sometimes emits trailing punctuation)
+                            t_args = {}
+                            for key, value in raw_args.items():
+                                clean_key = str(key).strip()
+                                while clean_key.endswith(":"):
+                                    clean_key = clean_key[:-1]
+                                if not clean_key:
+                                    continue
+                                t_args[clean_key] = value
+
+                            if t_name == "update_ticket":
+                                if "coomments" in t_args and "comments" not in t_args:
+                                    t_args["comments"] = t_args.pop("coomments")
+                                if "comments" in t_args and isinstance(t_args["comments"], str):
+                                    t_args["comments"] = t_args["comments"].lstrip(": ")
+
+                            skip_tool = False
+                            output_text = ""
+
+                            if t_name == "request_manager_approval":
+                                manager_email = (t_args.get("manager_email") or "").strip()
+                                if not manager_email:
+                                    ticket_id = t_args.get("ticket_id", "UNKNOWN")
+                                    warning = (
+                                        f"Manager email missing for {ticket_id}. "
+                                        "Ticket moved to Pending for manual approval."
+                                    )
+                                    print(f"   ⚠️ {warning}")
+                                    pending_args = {
+                                        "ticket_id": ticket_id,
+                                        "status": "Pending",
+                                        "comments": warning,
+                                    }
+                                    pending_result = await session.call_tool("update_ticket", arguments=pending_args)
+                                    output_text = f"Skipped approval: {warning} | {pending_result.content[0].text}"
+                                    skip_tool = True
+
+                            if not skip_tool:
+                                print(f"   ⚙️ Tool: {t_name} | Args: {t_args}")
+                                result = await session.call_tool(t_name, arguments=t_args)
+                                output_text = result.content[0].text
+
+                                if (
+                                    t_name == "request_manager_approval"
+                                    and "Failed to send approval email" in output_text
+                                ):
+                                    ticket_id = t_args.get("ticket_id", "UNKNOWN")
+                                    failure_note = (
+                                        f"Error sending approval email for {ticket_id}. "
+                                        "Verify SMTP credentials before reassigning."
+                                    )
+                                    followup_args = {
+                                        "ticket_id": ticket_id,
+                                        "status": "Pending",
+                                        "comments": failure_note,
+                                    }
+                                    followup = await session.call_tool("update_ticket", arguments=followup_args)
+                                    output_text = (
+                                        f"{output_text} | Added note: {followup.content[0].text}"
+                                    )
+
                             print(f"      ↳ Result: {output_text[:100]}...")
-                            
+
                             messages.append({"role": "tool", "tool_call_id": tool.id, "name": t_name, "content": output_text})
                     
                     except Exception as e:

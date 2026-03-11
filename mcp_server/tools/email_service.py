@@ -1,12 +1,13 @@
 import smtplib
 import os
+from urllib.parse import quote_plus
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 
 load_dotenv()
 
-def send_approval_email(manager_email, ticket_id, priority, description, agent_email):
+def send_approval_email(manager_email, ticket_id, priority, description, agent_email, assignment_group=None):
     """
     Sends an approval email to the manager with links to approve or reject.
     """
@@ -20,10 +21,16 @@ def send_approval_email(manager_email, ticket_id, priority, description, agent_e
     if not all([smtp_server, smtp_user, smtp_password, sender_email]):
         print("⚠️ SMTP credentials not fully configured. Email not sent.")
         return False
+    if not manager_email:
+        print("⚠️ Manager email missing. Skipping approval email.")
+        return False
+
+    assignment_group = assignment_group or ""
 
     subject = f"ACTION REQUIRED: Approval Needed for P1 Ticket {ticket_id}"
     
-    approve_link = f"{base_url}/approve?ticket_id={ticket_id}&agent_email={agent_email}"
+    encoded_group = quote_plus(assignment_group)
+    approve_link = f"{base_url}/approve?ticket_id={ticket_id}&agent_email={agent_email}&assignment_group={encoded_group}"
     reject_link = f"{base_url}/reject?ticket_id={ticket_id}"
 
     html = f"""
@@ -35,6 +42,7 @@ def send_approval_email(manager_email, ticket_id, priority, description, agent_e
         <p><b>Priority:</b> {priority}</p>
         <p><b>Description:</b> {description}</p>
         <p><b>Proposed Assignee:</b> {agent_email}</p>
+        <p><b>Assignment Group:</b> {assignment_group or 'Not specified'}</p>
         <br>
         <p>
             <a href="{approve_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">APPROVE & ASSIGN</a>

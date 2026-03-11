@@ -79,7 +79,9 @@ from dotenv import load_dotenv
 
 # Import the bot logic and ServiceNow tools
 from agent.teams_bot import ITSMBot
-from mcp_server.tools.servicenow import update_incident
+from mcp_server.tools.servicenow import update_incident, get_tickets
+from mcp_server.tools.roster import find_best_assignee
+from mcp_server.tools import approval_tracker
 
 load_dotenv()
 
@@ -89,9 +91,14 @@ APP_PASSWORD = os.getenv("MICROSOFT_APP_PASSWORD")
 TENANT_ID = os.getenv("MICROSOFT_APP_TENANT_ID")
 
 if not all([APP_ID, APP_PASSWORD, TENANT_ID]):
-    print("❌ ERROR: Missing Azure Bot credentials in .env")
-    print("Ensure MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD, and MICROSOFT_APP_TENANT_ID are set.")
-    sys.exit(1)
+    print("⚠️ WARNING: Missing Azure Bot credentials in .env")
+    print("Teams Chat functionality will be disabled, but Manager Approval links will still work.")
+    # We set these to dummies so the adapter doesn't crash on init
+    APP_ID = APP_ID or "dummy"
+    APP_PASSWORD = APP_PASSWORD or "dummy"
+    TENANT_ID = TENANT_ID or "dummy"
+else:
+    print("✅ Azure Bot credentials loaded.")
 
 # --- 2. SETUP ADAPTER ---
 SETTINGS = BotFrameworkAdapterSettings(
@@ -133,14 +140,44 @@ async def messages(req: web.Request) -> web.Response:
 async def approve_ticket(req: web.Request) -> web.Response:
     ticket_id = req.query.get("ticket_id")
     agent_email = req.query.get("agent_email")
+    assignment_group = req.query.get("assignment_group")
     
-    if not ticket_id or not agent_email:
-        return web.Response(text="Missing ticket_id or agent_email", status=400)
+    if not ticket_id:
+        return web.Response(text="Missing ticket_id", status=400)
+    
+    assignee_data = None
+    if not agent_email or agent_email == "":
+        print(f"🔍 Agent Email missing for {ticket_id}. System is handling it...")
+        tickets = get_tickets({"number": ticket_id})
+        if isinstance(tickets, list) and len(tickets) > 0:
+            desc = tickets[0].get("desc", "")
+            assignee_data = find_best_assignee(desc)
+            agent_email = assignee_data.get("agent_email")
+            assignment_group = assignment_group or assignee_data.get("assignment_group")
+            print(f"✅ Found best agent automatically: {agent_email}")
+        else:
+            return web.Response(text=f"Error: Could not find ticket {ticket_id} to auto-assign.", status=404)
+
+    if not assignment_group and not assignee_data:
+        tickets = get_tickets({"number": ticket_id})
+        if isinstance(tickets, list) and len(tickets) > 0:
+            desc = tickets[0].get("desc", "")
+            derived = find_best_assignee(desc)
+            assignment_group = derived.get("assignment_group")
+
+    if not agent_email:
+        return web.Response(text="Could not determine agent for assignment.", status=400)
     
     print(f"✅ Manager Approved Ticket {ticket_id}. Assigning to {agent_email}")
     
-    # Direct update to ServiceNow
-    result = update_incident(ticket_id, assigned_to=agent_email, status="Assigned", comments="Manager approved via email link.")
+    result = update_incident(
+        ticket_id,
+        assigned_to=agent_email,
+        assignment_group=assignment_group,
+        status="in progress",
+        comments="Manager approved via email link."
+    )
+    approval_tracker.clear(ticket_id)
     
     return web.Response(
         text=f"<h1>Ticket Approved</h1><p>{result}</p><p>Ticket {ticket_id} has been assigned to {agent_email}.</p>",
@@ -157,6 +194,7 @@ async def reject_ticket(req: web.Request) -> web.Response:
     
     # Direct update to ServiceNow
     result = update_incident(ticket_id, status="On Hold", comments="Manager rejected assignment.")
+    approval_tracker.clear(ticket_id)
     
     return web.Response(
         text=f"<h1>Ticket Rejected</h1><p>{result}</p><p>Ticket {ticket_id} has been put on hold.</p>",

@@ -5,6 +5,7 @@ from mcp_server.tools.sla_policy import lookup_sla
 from mcp_server.tools.roster import find_best_assignee
 from mcp_server.tools.servicenow import create_incident, get_unassigned_tickets, update_incident, test_connection, get_tickets
 from mcp_server.tools.email_service import send_approval_email
+from mcp_server.tools import approval_tracker
 
 mcp = FastMCP("ITSM-System")
 
@@ -49,34 +50,56 @@ def update_ticket(ticket_id: str, status: str = None, assigned_to: str = None, c
 @mcp.tool()
 def find_assignee(description: str) -> str:
     """
-    Returns JSON string: {agent_name, agent_email, manager_name, manager_email, ...}
+    Returns JSON string containing agent, manager, and assignment group details.
     """
-    # --- FIX IS HERE: Convert Dict to JSON String ---
     result_dict = find_best_assignee(description)
     return json.dumps(result_dict)
 
 @mcp.tool()
-def assign_ticket(ticket_id: str, email: str) -> str:
-    return update_incident(ticket_id, assigned_to=email, status="Assigned")
+def assign_ticket(ticket_id: str, email: str, assignment_group: str = None) -> str:
+    if not assignment_group:
+        tickets = get_tickets({"number": ticket_id})
+        if isinstance(tickets, list) and tickets:
+            desc = tickets[0].get("desc", "")
+            fallback = find_best_assignee(desc)
+            assignment_group = fallback.get("assignment_group")
+    return update_incident(ticket_id, assigned_to=email, assignment_group=assignment_group, status="in progress")
 
 @mcp.tool()
-def request_manager_approval(manager_email: str, ticket_id: str, reason: str, agent_email: str) -> str:
+def request_manager_approval(
+    manager_email: str,
+    ticket_id: str,
+    reason: str,
+    agent_email: str,
+    assignment_group: str = None,
+) -> str:
     """
     Sends an approval email to the manager.
     Returns a status message.
     """
+    if approval_tracker.is_pending(ticket_id):
+        return f"Approval already pending for {ticket_id}. Waiting for manager response."
+
     print(f"📧 Sending approval email to {manager_email} for ticket {ticket_id}")
     
-    # We pass 'P1' as priority here since this tool is specifically for P1 tickets in worker logic
+    if not assignment_group:
+        tickets = get_tickets({"number": ticket_id})
+        if isinstance(tickets, list) and tickets:
+            desc = tickets[0].get("desc", "")
+            derived = find_best_assignee(desc)
+            assignment_group = derived.get("assignment_group")
+    
     success = send_approval_email(
         manager_email=manager_email,
         ticket_id=ticket_id,
         priority="1 - Critical",
         description=reason,
-        agent_email=agent_email
+        agent_email=agent_email,
+        assignment_group=assignment_group
     )
     
     if success:
+        approval_tracker.mark_pending(ticket_id, manager_email, agent_email, assignment_group)
         return f"Email sent to {manager_email}. Ticket {ticket_id} is pending manager approval."
     else:
         return f"Failed to send approval email to {manager_email}. Check SMTP configuration."
