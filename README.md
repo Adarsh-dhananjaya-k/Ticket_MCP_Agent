@@ -27,6 +27,7 @@ This system demonstrates a "Human-in-the-Loop" architecture with two distinct AI
  ┃ ┃ ┣ 📜roster.py
  ┃ ┃ ┣ 📜servicenow.py
  ┃ ┃ ┣ 📜sla_policy.py
+ ┃ ┃ ┣ 📜email_service.py
  ┃ ┃ ┗ 📜__init__.py
  ┃ ┣ 📜server.py
  ┃ ┗ 📜__init__.py
@@ -69,7 +70,23 @@ AZURE_SEARCH_INDEX_NAME="sla-index"
 SNOW_INSTANCE="devXXXXX.service-now.com"
 SNOW_USER="your-username"
 SNOW_PASSWORD="your-password"
+
+# SMTP (Email Service) — REQUIRED for P1 approvals
+SMTP_SERVER="smtp.gmail.com"
+SMTP_PORT=587
+SMTP_USER="your-email@gmail.com"
+SMTP_PASSWORD="your-app-password"
+SMTP_FROM_EMAIL="your-email@gmail.com"
+BASE_URL="http://localhost:3978" 
 ```
+
+> **Important:** Leave these SMTP values blank and every P1 ticket will be left in `Pending` because the worker cannot send the manager approval email. Use a real mailbox/app password before testing the approval loop.
+
+You can quickly verify the SMTP configuration with:
+```bash
+python scripts/check_smtp_service.py --to your-email@example.com
+```
+The script attempts to log in and send a test message so you can catch credential issues before launching the system.
 
 ### 4. Verify ServiceNow Connection (Optional)
 You can run a quick check to see if your ServiceNow credentials are correct:
@@ -83,30 +100,48 @@ Run this script once to create the `data/` folder and Excel files.
 python setup_data.py
 ```
 
+The generated `data/roster.xlsx` now contains `Assignment_Group`, `Team`, `Manager`, workload, and role columns. The worker agents and approval flow read that `Assignment_Group` value so ServiceNow receives both the assignee and the correct assignment group.
+
+### 5. Sync Roster from ServiceNow (optional but recommended)
+If your ServiceNow instance already contains the right users/groups, mirror them back into Excel so assignments stay accurate:
+```bash
+python scripts/sync_snow_roster.py
+```
+This populates each roster row with `Assignment_Group` and manager data pulled live via the ServiceNow API.
+
 ---
 
-## ⚡ How to Run (The 3-Terminal Setup)
+## ⚡ How to Run
 
-You need to run three separate processes to simulate the distributed system.
+You can now run the entire system with a single command using the master startup script.
 
-### Terminal 1: The MCP Server (Tools Host)
-This provides the "API" that the agents use.
+### Option 1: The Master Startup Script (Recommended)
+Launch the MCP Server, the Teams Bot, and the Worker Agent in parallel.
 ```bash
-python -m mcp_server.server
-```
-*Wait until you see: `🚀 MCP Server Running...`*
-
-### Terminal 2: The Chat Agent (Front Desk)
-This is where you act as the User.
-```bash
-python -m agent.chat_agent
+python run_system.py
 ```
 
-### Terminal 3: The Worker Agent (Back Office)
-This runs the background loop.
-```bash
-python -m agent.worker_agent
-```
+### Option 2: Manual 3-Terminal Setup
+If you prefer separate logs:
+
+1. **Terminal 1: MCP Server** -> `python -m mcp_server.server`
+2. **Terminal 2: Teams Bot** -> `python -m agent.app`
+3. **Terminal 3: Worker Agent** -> `python -m agent.worker_agent`
+
+---
+
+---
+
+## 🤝 Human-in-the-Loop: Manager Approval Workflow
+
+The system incorporates a mandatory approval step for **Critical (P1)** tickets before they are assigned to team members.
+
+1.  **Detection**: The Worker Agent identifies a P1 ticket.
+2.  **Notification**: An approval request is sent via SMTP to the specific **Team Manager** (defined in `data/teams_mapping.xlsx`).
+3.  **Action**: The Manager receives an HTML email with two buttons:
+    *   **APPROVE**: Automatically assigns the ticket to the best agent in ServiceNow.
+    *   **REJECT**: Puts the ticket on hold and adds a rejection comment.
+4.  **Audit**: All actions are recorded directly in the ServiceNow ticket work notes.
 
 ---
 
@@ -114,20 +149,15 @@ python -m agent.worker_agent
 
 Use these inputs in the **Chat Agent (Terminal 2)** and watch what happens in the **Worker Agent (Terminal 3)**.
 
-### Scenario A: The Critical SAP Issue (High Priority)
+### Scenario A: The Critical SAP Issue (High Priority Approval)
 *   **User Input:** "My SAP login is failing with error 500."
-*   **Chat Agent Action:** 
-    *   Detects "SAP" & "Error 500". 
-    *   Azure Search returns **P1 Critical** policy.
-    *   Creates Ticket (e.g., `INC1001`).
 *   **Worker Agent Action:**
-    *   Wakes up.
-    *   Reads `INC1001`.
+    *   Detects Priority 1.
     *   Maps "SAP" $\to$ `SAP_Support` Team.
-    *   Checks Roster:
-        *   Alice (High Load)
-        *   **Bob (Low Load)** $\leftarrow$ Selected.
-    *   **Result:** Assigns ticket to **Bob**.
+    *   Sends **Approval Email** to `softmgr@demo.com` instead of immediate assignment.
+*   **Manager Action:**
+    *   Manager clicks **APPROVE** in their email.
+    *   Ticket status updates to `Assigned` and `assigned_to` is set to the best agent (e.g., Bob).
 
 ### Scenario B: Database Access (Medium Priority)
 *   **User Input:** "I need read access to the Oracle SQL database."
@@ -163,4 +193,10 @@ Use these inputs in the **Chat Agent (Terminal 2)** and watch what happens in th
 
 **3. Worker isn't picking up tickets**
 *   The worker sleeps for 15 seconds between loops. Ensure the ticket state in ServiceNow is "New" (State Code 1) and that it is "Unassigned".
+
+**4. Ticket shows “Assigned” in logs but not in ServiceNow**
+*   ServiceNow refuses to populate `assigned_to` unless `assignment_group` is set. Make sure your roster rows include the exact group name (see `setup_data.py` output or rerun `scripts/sync_snow_roster.py`). The MCP layer forwards that group automatically with each `assign_ticket`/`request_manager_approval` call.
+
+**5. “Failed to send approval email … Check SMTP configuration.”**
+*   One or more SMTP values in `.env` are blank or incorrect. Until you provide a working mailbox/app password, P1 tickets are moved to `Pending` and require manual assignment.
 
