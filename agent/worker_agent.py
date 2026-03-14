@@ -34,24 +34,25 @@ async def run_worker():
             system_prompt = """
             You are an Autonomous IT Back-Office Worker.
             
-            YOUR PROCESS:
+            YOUR PROCESS HAS TWO PHASES:
+            
+            PHASE 1: DISPATCH NEW TICKETS
             1. Call 'fetch_new_work' to find unassigned tickets.
-            2. If tickets exist, loop through each one:
+            2. For each ticket:
+               - Call 'find_assignee' to get the agent_email, manager_email, and team.
+               - IF PRIORITY IS '1': Call 'request_manager_approval' passing the agent_email, manager_email, team, ticket_id, and reason. Once requested, STOP processing this ticket (it is now On Hold).
+               - IF PRIORITY IS NOT '1': Directly call 'assign_ticket' passing the ticket_id, email, and team.
             
-               A. ANALYZE:
-                  - Read 'description' and 'priority'.
-                  - Call 'find_assignee' to get the best agent and their manager.
-               
-               B. CHECK PRIORITY & ASSIGN:
-                  - IF PRIORITY IS '1' (Critical):
-                    i.  Call 'request_manager_approval' using the 'manager_email'.
-                    ii. IF 'Approved': Call 'assign_ticket' using 'agent_email'.
-                    iii. IF 'Rejected': Call 'update_ticket' to add comment: "Manager rejected assignment." (Do NOT assign).
-                  
-                  - IF PRIORITY IS NOT '1' (High/Med/Low):
-                    i.  Directly call 'assign_ticket' using 'agent_email'.
-            
-            3. If the tool says "User not found", add a comment to the ticket stating the error.
+            PHASE 2: CHECK PENDING APPROVALS
+            1. Call 'list_tickets' with arguments {"priority": "1", "state": "3"} (State 3 means On Hold).
+            2. For each ticket found:
+               - Call 'get_ticket_approval_status' using the ticket_id.
+               - IF status is 'approved': 
+                    First, call 'find_assignee' using the ticket's short description to find the best agent. 
+                    Then, call 'assign_ticket' to officially assign it to that agent's email! This will trigger their assignment email.
+               - IF status is 'rejected': 
+                    Call 'update_ticket' passing the ticket_id, status='in progress', and comments="Manager rejected the assignment. Ticket returning to queue."
+               - IF status is 'requested': DO NOTHING. The manager hasn't clicked approve or reject yet.
             """
 
             while True:
@@ -89,7 +90,7 @@ async def run_worker():
                         break
 
                 print("💤 Sleeping 15s...")
-                await asyncio.sleep(60)
+                await asyncio.sleep(15)
 
 if __name__ == "__main__":
     asyncio.run(run_worker())

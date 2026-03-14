@@ -169,16 +169,34 @@ def is_configured():
     return INSTANCE and "dev" in INSTANCE and USER
 
 def get_sysid_by_query(table, query):
-    """Helper to find a SysID based on a query."""
+    """Helper to find a SysID based on a query. GUARANTEES a raw string."""
     if not is_configured(): return None
     url = f"https://{INSTANCE}/api/now/table/{table}"
-    params = {"sysparm_query": query, "sysparm_fields": "sys_id", "sysparm_limit": 1}
+    
+    # FORCE sysparm_display_value=false so SNOW gives us raw strings
+    params = {
+        "sysparm_query": query, 
+        "sysparm_fields": "sys_id", 
+        "sysparm_limit": 1,
+        "sysparm_display_value": "false" 
+    }
+    
     try:
         res = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params)
-        data = res.json().get("result", [])
-        return data[0]["sys_id"] if data else None
-    except:
+        data = res.json().get("result",[])
+        
+        if data:
+            val = data[0].get("sys_id")
+            # If SNOW still returns a dict, extract the 'value' specifically
+            if isinstance(val, dict):
+                return str(val.get("value", "")).strip()
+            return str(val).strip()
+            
         return None
+    except Exception as e:
+        print(f"❌ Error in get_sysid_by_query: {e}")
+        return None
+
 
 def get_valid_resolution_codes():
     """
@@ -257,32 +275,26 @@ def update_incident(ticket_id, **kwargs):
     params = {"sysparm_query": f"number={ticket_id}"}
     
     try:
-        # 1. Get Ticket Data
         res = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params)
-        records = res.json().get("result", [])
+        records = res.json().get("result",[])
         if not records: return "Ticket not found"
         
         ticket_data = records[0]
         sys_id = ticket_data["sys_id"]
         current_caller = ticket_data.get("caller_id", "")
 
-        # 2. Prepare Payload
         payload = {}
         
         if "status" in kwargs:
             target_state = SN_STATE_MAP.get(str(kwargs["status"]).lower(), "2")
             payload["state"] = target_state
             
-            # --- INTELLIGENT RESOLUTION FIX ---
-            if target_state in ["6", "7"]: # Resolved/Closed
-                # Auto-fetch a valid code from the system
+            if target_state in ["6", "7"]: 
                 valid_code = get_valid_resolution_codes()
                 payload["close_code"] = valid_code
                 payload["close_notes"] = kwargs.get("comments", "Resolved by AI Agent")
                 
-                # Patch Caller if missing
                 if not current_caller:
-                    print("⚠️ Caller missing. Patching with 'admin'.")
                     admin_id = get_admin_sysid()
                     if admin_id: payload["caller_id"] = admin_id
 
@@ -292,21 +304,49 @@ def update_incident(ticket_id, **kwargs):
             if user_sys_id: payload["assigned_to"] = user_sys_id
             else: return f"❌ Error: User '{email}' not found."
 
+        # --- FIX: ASSIGNMENT GROUP LOGIC ADDED HERE ---
+        if "assignment_group" in kwargs:
+            group_name = kwargs["assignment_group"]
+            group_sys_id = get_sysid_by_query("sys_user_group", f"name={group_name}")
+            if group_sys_id: 
+                payload["assignment_group"] = group_sys_id
+            else: 
+                print(f"⚠️ Warning: Assignment group '{group_name}' not found in SNOW.")
+
         if "comments" in kwargs: payload["comments"] = kwargs["comments"]
 
-        # 3. Send Update
         update_url = f"{url}/{sys_id}"
         response = requests.patch(update_url, auth=HTTPBasicAuth(USER, PWD), json=payload)
         
         if response.status_code != 200:
             err = response.json().get("error", {})
-            print(f"❌ ServiceNow Error: {err.get('message')} | {err.get('detail')}")
             return f"ServiceNow Rejected Update: {err.get('message')}. {err.get('detail')}"
         
         return f"Updated {ticket_id} successfully."
         
     except Exception as e:
         return f"Update Error: {str(e)}"
+
+    
+def check_approval_status(ticket_id):
+    """Checks the current status of the approval in ServiceNow."""
+    if not is_configured(): return "❌ Config Error"
+    
+    inc_sys_id = get_sysid_by_query("incident", f"number={ticket_id}")
+    if not inc_sys_id: return "Ticket not found."
+    
+    url = f"https://{INSTANCE}/api/now/table/sysapproval_approver"
+    params = {"sysparm_query": f"sysapproval={inc_sys_id}", "sysparm_limit": 1}
+    
+    try:
+        res = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params)
+        data = res.json().get("result",[])
+        if data:
+            # Will return 'requested', 'approved', or 'rejected'
+            return data[0].get("state") 
+        return "none"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 def test_connection():
     return "✅ Connected" if is_configured() else "❌ Not Configured"
