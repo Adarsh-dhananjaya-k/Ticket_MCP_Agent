@@ -5,6 +5,7 @@ from mcp_server.tools.sla_policy import lookup_sla
 from mcp_server.tools.roster import find_best_assignee
 from mcp_server.tools.servicenow import create_incident, get_unassigned_tickets, update_incident, test_connection, get_tickets
 from mcp_server.tools.servicenow import  check_approval_status
+import secrets
 
 mcp = FastMCP("ITSM-System")
 
@@ -25,8 +26,20 @@ def lookup_sla_policy(description: str) -> str:
     return lookup_sla(description)
 
 @mcp.tool()
-def create_ticket(description: str, impact: str = "3", urgency: str = "3") -> str:
-    return create_incident(description, impact=impact, urgency=urgency)
+def create_ticket(description: str, impact: str = "3", urgency: str = "3", suggested_engineer_email: str = None, assignment_group: str = None) -> str:
+    """
+    Creates a ticket in ServiceNow. 
+    If you know the best assignee and team, provide `suggested_engineer_email` and `assignment_group`.
+    For Priority 1 issues (Impact=1, Urgency=1), the system will automatically place the ticket 'On Hold' for manager approval.
+    """
+    return create_incident(
+        description, 
+        impact=impact, 
+        urgency=urgency, 
+        suggested_engineer_email=suggested_engineer_email,
+        assignment_group=assignment_group
+    )
+
 
 @mcp.tool()
 def fetch_new_work() -> str:
@@ -60,6 +73,11 @@ def assign_ticket(ticket_id: str, email: str, team: str = None) -> str:
     # Now it accepts team!
     return update_incident(ticket_id, assigned_to=email, assignment_group=team, status="Assigned")
 
+
+
+
+
+
 @mcp.tool()
 def request_manager_approval(agent_email: str, manager_email: str, team: str, ticket_id: str, reason: str) -> str:
     """Assigns ticket, puts it On Hold, and creates Approval Record via Custom API."""
@@ -73,6 +91,9 @@ def request_manager_approval(agent_email: str, manager_email: str, team: str, ti
         assignment_group=team,
         comments=f"Automated System: Placed on hold pending manager approval from {manager_email}. Proposed assignee: {agent_email}. Reason: {reason}"
     )
+
+     # 2. GENERATE THE SECURE TOKEN
+    approval_token = secrets.token_urlsafe(32) 
     
     # 2. Get SysIDs securely from ServiceNow
     from mcp_server.tools.servicenow import get_sysid_by_query, INSTANCE, USER, PWD
@@ -95,7 +116,8 @@ def request_manager_approval(agent_email: str, manager_email: str, team: str, ti
     # The payload keys MUST match the variables in your JavaScript exactly!
     payload = {
         "manager_sys_id": str(mgr_id).strip(),
-        "incident_sys_id": str(inc_id).strip()
+        "incident_sys_id": str(inc_id).strip(),
+        "approval_token": approval_token  # <--- NEW FIELD
     }
     
     headers = {
@@ -113,6 +135,11 @@ def request_manager_approval(agent_email: str, manager_email: str, team: str, ti
     else:
         print(f"   ↳ ❌ Failed to create approval: {res.text}")
         return f"⚠️ Failed to create approval record: {res.text}"
+
+
+
+
+
 
 @mcp.tool()
 def get_ticket_approval_status(ticket_id: str) -> str:
