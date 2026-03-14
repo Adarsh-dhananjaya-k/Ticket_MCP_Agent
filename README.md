@@ -1,155 +1,141 @@
 
-# 🤖 Agentic ITSM System (Dual-Agent Architecture)
-
-A Multi-Agent System (MAS) for IT Service Management using the **Model Context Protocol (MCP)** and **Azure OpenAI**.
-
-This system demonstrates a "Human-in-the-Loop" architecture with two distinct AI Agents working in parallel:
-1.  **Chat Agent (Front Desk):** Handles real-time user intake, SLA lookups via Azure AI Search, and ticket creation.
-2.  **Worker Agent (Back Office):** Runs autonomously to detect new tickets, analyze workloads via Excel Rosters, and assign tickets to the best available engineer.
 
 
+
+# 🤖 AI-Powered IT Service Desk Bot for Microsoft Teams
+
+An intelligent, conversational IT Service Desk assistant built for Microsoft Teams. This bot leverages **Azure OpenAI**, **Azure AI Search (RAG)**, the **Model Context Protocol (MCP)**, and **ServiceNow** to automate incident routing, triage, and manager approvals.
+
+## ✨ Key Features
+* **Conversational Interface:** Users report IT issues natively within Microsoft Teams.
+* **Automated SLA & Priority Triage:** Uses Azure AI Search to query internal SLA policy documents to dynamically determine the Priority/Urgency of a ticket.
+* **Smart AI Assignment Routing:** Queries an Excel-based team mapping matrix and cross-references it with **real-time ServiceNow workload metrics** to find the absolute best available L1/L2 agent.
+* **ServiceNow Integration:** Automatically creates, updates, and resolves incidents in ServiceNow.
+* **1-Click Secure Manager Approvals:** For high-priority (P1) issues, the bot places the ticket "On Hold", generates a cryptographically secure token, and emails the manager. The manager can approve the AI's suggested assignment with a single click from their phone/laptop—**without needing to log in to ServiceNow.**
 
 ---
 
-## 📂 Project Structure
+## 🏗️ Architecture
+1. **Microsoft Teams / Bot Framework (`app.py`):** Maintains conversational state and user interaction.
+2. **AI Reasoning Engine (`teams_bot.py`):** Azure OpenAI processes the conversation, determines the next steps, and decides which tools to call.
+3. **MCP Tool Server (`server.py`):** Exposes Python functions as discrete tools for the AI to use (e.g., `create_ticket`, `find_assignee`, `lookup_sla_policy`).
+4. **ServiceNow Custom APIs:** Handles secure token storage, approval record generation, and unauthenticated one-click email actions.
 
-```text
-📦Ticket_MCP_Agent
- ┣ 📂agent
- ┃ ┣ 📜chat_agent.py
- ┃ ┣ 📜worker_agent.py
- ┃ ┗ 📜__init__.py
- ┣ 📂data
- ┃ ┣ 📜roster.xlsx
- ┃ ┗ 📜teams_mapping.xlsx
- ┣ 📂mcp_server
- ┃ ┣ 📂tools
- ┃ ┃ ┣ 📜roster.py
- ┃ ┃ ┣ 📜servicenow.py
- ┃ ┃ ┣ 📜sla_policy.py
- ┃ ┃ ┗ 📜__init__.py
- ┃ ┣ 📜server.py
- ┃ ┗ 📜__init__.py
- ┣ 📜.env
- ┣ 📜.gitignore
- ┣ 📜README.md
- ┣ 📜requirements.txt
- ┗ 📜setup_data.py
+---
+
+## 📋 Prerequisites
+* **Python 3.9+**
+* **Microsoft Azure Account:** Azure OpenAI deployment & Azure AI Search index (with your SLA policies loaded).
+* **Microsoft Bot Framework:** App ID and Password for Teams integration.
+* **ServiceNow Developer Instance:** Admin access to create custom fields and APIs.
+
+---
+
+## ⚙️ Environment Variables Setup
+Create a `.env` file in the root directory of the project and populate it with the following:
+
+```env
+# Microsoft Bot Framework Credentials
+MICROSOFT_APP_ID=your_bot_app_id
+MICROSOFT_APP_PASSWORD=your_bot_password
+MICROSOFT_APP_TENANT_ID=your_tenant_id
+
+# Azure OpenAI Credentials
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_KEY=your_openai_key
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
+AZURE_OPENAI_DEPLOYMENT=your_model_deployment_name
+
+# Azure AI Search (SLA Policy Knowledge Base)
+AZURE_SEARCH_ENDPOINT=https://your-search.search.windows.net
+AZURE_SEARCH_KEY=your_search_key
+AZURE_SEARCH_INDEX_NAME=your_index_name
+
+# ServiceNow Credentials
+SNOW_INSTANCE=devXXXXX.service-now.com
+SNOW_USER=admin
+SNOW_PASSWORD=your_snow_password
 ```
 
 ---
 
-## 🚀 Installation & Setup
+## 🛠️ ServiceNow Configuration
+To make the 1-click token approval system work, you must configure the following in your ServiceNow instance:
 
-### 1. Prerequisites
-*   Python 3.10+
-*   Azure OpenAI Endpoint & Key
-*   Azure AI Search Endpoint & Key (with a "sla-index" created)
+### 1. Custom Fields
+* Navigate to the `incident` table and add a new custom field of type **Reference** (pointing to the `sys_user` table) named `u_ai_suggested_engineer`.
+* Ensure the out-of-the-box `correlation_id` field is active on the incident table (used to store the secure one-time token).
 
-### 2. Install Dependencies
+### 2. Custom Scripted REST API
+Navigate to **Scripted REST APIs** and create a new API:
+* **Name:** Teams Bot API
+* **API ID:** `teams_bot_api` (Namespace: e.g., `1920142`)
+
+**Resource A: Create Approval (POST)**
+* **Relative Path:** `/create_approval`
+* **Requires Authentication:** Yes
+* **Purpose:** Takes the payload from Python, saves the secure token to the incident's `correlation_id`, and creates the `sysapproval_approver` record.
+
+**Resource B: Process Approval Click (GET)**
+* **Relative Path:** `/process_approval`
+* **Requires Authentication:** ❌ **NO** (Uncheck this box so managers can click the email without logging in).
+* **Purpose:** Reads the `token` parameter from the URL, validates it against the incident's `correlation_id`, assigns the ticket, clears the token, and returns a success HTML page.
+
+### 3. Email Notification & Script
+* Navigate to **System Notification -> Email -> Notification Email Scripts**.
+* Create a script named `generate_manager_assignment_links`.
+* This script loops through the assignment group members, grabs the secret token from the incident, and generates the dynamic HTML buttons for the manager's email.
+
+---
+
+## 🚀 Installation & Running the Application
+
+**1. Clone the repository and install dependencies:**
 ```bash
+git clone https://github.com/yourusername/teams-itsm-bot.git
+cd teams-itsm-bot
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Configure Environment
-Create a `.env` file in the root directory:
-```ini
-# Azure OpenAI
-AZURE_OPENAI_ENDPOINT="https://YOUR-RESOURCE.openai.azure.com/"
-AZURE_OPENAI_KEY="your-key-here"
-AZURE_OPENAI_API_VERSION="2024-08-01-preview"
-AZURE_OPENAI_DEPLOYMENT="gpt-4o"
+**2. Ensure local data files are present:**
+Ensure `roster.xlsx` and `teams_mapping.xlsx` exist in the `data/` folder.
 
-# Azure AI Search (Knowledge Base)
-AZURE_SEARCH_ENDPOINT="https://YOUR-SEARCH.search.windows.net"
-AZURE_SEARCH_KEY="your-admin-key"
-AZURE_SEARCH_INDEX_NAME="sla-index"
-```
-
-### 4. Generate Mock Data
-Run this script once to create the `data/` folder and Excel files.
+**3. Start the MCP Server:**
+Open a terminal and start the tool server (runs on port 8000 via SSE).
 ```bash
-python setup_data.py
+python server.py
 ```
+
+**4. Start the Teams Bot:**
+Open a second terminal and start the aiohttp web server.
+```bash
+python app.py
+```
+
+**5. Expose to the Internet (For Local Testing):**
+If testing locally with Microsoft Teams or the Bot Framework Emulator, use Ngrok to tunnel port 3978.
+```bash
+ngrok http 3978
+```
+*(Update your Azure Bot Messaging Endpoint to `https://<your-ngrok-url>.ngrok.app/api/messages`)*
 
 ---
 
-## ⚡ How to Run (The 3-Terminal Setup)
-
-You need to run three separate processes to simulate the distributed system.
-
-### Terminal 1: The MCP Server (Tools Host)
-This provides the "API" that the agents use.
-```bash
-python -m mcp_server.server
-```
-*Wait until you see: `🚀 MCP Server Running...`*
-
-### Terminal 2: The Chat Agent (Front Desk)
-This is where you act as the User.
-```bash
-python -m agent.chat_agent
-```
-
-### Terminal 3: The Worker Agent (Back Office)
-This runs the background loop.
-```bash
-python -m agent.worker_agent
-```
+## 🧪 How to Use (Workflow Example)
+1. **User:** "Hi, my design software keeps crashing on startup. Please help."
+2. **Bot (Thinking):**
+   * Calls `lookup_sla_policy` -> Determines this is an urgent/Critical P1 issue.
+   * Calls `find_assignee` -> Looks at Excel mappings, determines it belongs to `Software_Support`. Queries SNOW to find that "Karen" has 0 active tickets.
+   * Calls `create_ticket` -> Creates INC0010147.
+   * Calls `request_manager_approval` -> Puts ticket On Hold, generates token, pushes to SNOW.
+3. **Bot (Response):** "I have created INC0010147. Because this is a Critical Priority issue, it has been placed On Hold while an email is sent to your team manager to approve the AI-suggested assignment to Karen."
+4. **Manager:** Receives the email, clicks **"⭐ Approve AI Assignment[Karen]"**.
+5. **System:** Token is validated instantly. Ticket is assigned to Karen and moved to "In Progress".
 
 ---
 
-## 🧪 Test Scenarios
-
-Use these inputs in the **Chat Agent (Terminal 2)** and watch what happens in the **Worker Agent (Terminal 3)**.
-
-### Scenario A: The Critical SAP Issue (High Priority)
-*   **User Input:** "My SAP login is failing with error 500."
-*   **Chat Agent Action:** 
-    *   Detects "SAP" & "Error 500". 
-    *   Azure Search returns **P1 Critical** policy.
-    *   Creates Ticket (e.g., `INC1001`).
-*   **Worker Agent Action:**
-    *   Wakes up.
-    *   Reads `INC1001`.
-    *   Maps "SAP" $\to$ `SAP_Support` Team.
-    *   Checks Roster:
-        *   Alice (High Load)
-        *   **Bob (Low Load)** $\leftarrow$ Selected.
-    *   **Result:** Assigns ticket to **Bob**.
-
-### Scenario B: Database Access (Medium Priority)
-*   **User Input:** "I need read access to the Oracle SQL database."
-*   **Chat Agent Action:**
-    *   Detects "Oracle" / "Access".
-    *   Azure Search returns **P2/P3** policy.
-    *   Creates Ticket (e.g., `INC1002`).
-*   **Worker Agent Action:**
-    *   Maps "Oracle" $\to$ `Database_Admin` Team.
-    *   Checks Roster:
-        *   **Charlie (Medium Load)** $\leftarrow$ Selected.
-    *   **Result:** Assigns ticket to **Charlie**.
-
-### Scenario C: WiFi/Network (Low Priority)
-*   **User Input:** "The office WiFi is a bit slow today."
-*   **Chat Agent Action:**
-    *   Detects "WiFi" / "Slow".
-    *   Creates Ticket.
-*   **Worker Agent Action:**
-    *   Maps "WiFi" $\to$ `Network_Ops` Team.
-    *   Checks Roster.
-    *   **Result:** Assigns to **David**.
-
----
-
-## 🛠️ Troubleshooting
-
-**1. `openai.NotFoundError: Error code: 404`**
-*   Check your `.env` file. The `AZURE_OPENAI_DEPLOYMENT` must match the **Deployment Name** in Azure AI Studio, not the model name.
-
-**2. `ConnectionRefusedError`**
-*   Make sure **Terminal 1 (Server)** is running before you start the agents.
-
-**3. Worker isn't picking up tickets**
-*   The worker sleeps for 15 seconds between loops. Be patient, or check if the ticket status in `servicenow_mock_db.json` is actually "New".
-
+## 🛡️ Security Notes
+* The unauthenticated `/process_approval` API endpoint is secured by cryptographically strong, 32-character pseudo-random URL-safe tokens.
+* Tokens are strictly single-use. Once clicked, the `correlation_id` is cleared from ServiceNow, rendering the URL permanently inactive.
