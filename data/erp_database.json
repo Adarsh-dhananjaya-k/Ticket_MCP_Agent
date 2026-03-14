@@ -1,0 +1,19 @@
+{
+  "PO-2026-88": {
+    "item": "Industrial Steel Grade A",
+    "quantity": 100,
+    "unit_price": 500,
+    "total_authorized": 50000,
+    "currency": "USD",
+    "status": "Approved"
+  },
+  "INV-2026-003": {
+    "related_po": "PO-2026-88",
+    "billed_item": "Industrial Steel Grade A",
+    "billed_quantity": 100,
+    "billed_unit_price": 550,
+    "total_billed": 55000,
+    "variance_reason": "Price Increase - Unapproved",
+    "status": "Blocked"
+  }
+}

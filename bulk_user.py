@@ -43,6 +43,7 @@ users = [
     ("Xander", "xander@demo.com"),
     ("Yara", "yara@demo.com"),
     ("Zoe", "zoe@demo.com"),
+    ("Jhon", "jhon@demo.com"),
 ]
 
 # ---------------- FUNCTIONS ----------------

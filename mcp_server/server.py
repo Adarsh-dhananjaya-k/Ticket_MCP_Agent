@@ -4,6 +4,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp_server.tools.sla_policy import lookup_sla
 from mcp_server.tools.roster import find_best_assignee
 from mcp_server.tools.servicenow import create_incident, get_unassigned_tickets, update_incident, test_connection, get_tickets
+from mcp_server.tools.servicenow import  check_approval_status
+import secrets
 
 mcp = FastMCP("ITSM-System")
 
@@ -24,8 +26,20 @@ def lookup_sla_policy(description: str) -> str:
     return lookup_sla(description)
 
 @mcp.tool()
-def create_ticket(description: str, impact: str = "3", urgency: str = "3") -> str:
-    return create_incident(description, impact=impact, urgency=urgency)
+def create_ticket(description: str, impact: str = "3", urgency: str = "3", suggested_engineer_email: str = None, assignment_group: str = None) -> str:
+    """
+    Creates a ticket in ServiceNow. 
+    If you know the best assignee and team, provide `suggested_engineer_email` and `assignment_group`.
+    For Priority 1 issues (Impact=1, Urgency=1), the system will automatically place the ticket 'On Hold' for manager approval.
+    """
+    return create_incident(
+        description, 
+        impact=impact, 
+        urgency=urgency, 
+        suggested_engineer_email=suggested_engineer_email,
+        assignment_group=assignment_group
+    )
+
 
 @mcp.tool()
 def fetch_new_work() -> str:
@@ -55,26 +69,87 @@ def find_assignee(description: str) -> str:
     return json.dumps(result_dict)
 
 @mcp.tool()
-def assign_ticket(ticket_id: str, email: str) -> str:
-    return update_incident(ticket_id, assigned_to=email, status="Assigned")
+def assign_ticket(ticket_id: str, email: str, team: str = None) -> str:
+    # Now it accepts team!
+    return update_incident(ticket_id, assigned_to=email, assignment_group=team, status="Assigned")
 
-# --- MOCK APPROVAL TOOL ---
+
+
+
+
+
 @mcp.tool()
-def request_manager_approval(manager_email: str, ticket_id: str, reason: str) -> str:
-    """
-    DEMO ONLY: Simulates sending an email to the manager.
-    Returns 'Approved' or 'Rejected'.
-    """
-    print(f"\n📧 [DEMO EMAIL SENT]")
-    print(f"   To: {manager_email}")
-    print(f"   Subject: P1 Ticket Approval Needed ({ticket_id})")
-    print(f"   Body: {reason}\n")
+def request_manager_approval(agent_email: str, manager_email: str, team: str, ticket_id: str, reason: str) -> str:
+    """Assigns ticket, puts it On Hold, and creates Approval Record via Custom API."""
+    print(f"\n⚙️[APPROVAL] Assigning {ticket_id} to {agent_email} ({team})...")
     
-    # Randomly approve or reject for demo
-    decision = random.choices(["Approved", "Rejected"], weights=[0.8, 0.2], k=1)[0]
+    # 1. Update the Incident to "On Hold" and assign to the L1/L2 agent
+    update_incident(
+        ticket_id, 
+        status="on hold", 
+        # REMOVED assigned_to=agent_email  <-- This stops the email to Karen!
+        assignment_group=team,
+        comments=f"Automated System: Placed on hold pending manager approval from {manager_email}. Proposed assignee: {agent_email}. Reason: {reason}"
+    )
+
+     # 2. GENERATE THE SECURE TOKEN
+    approval_token = secrets.token_urlsafe(32) 
     
-    print(f"   📩 [MANAGER REPLIED]: {decision}\n")
-    return decision
+    # 2. Get SysIDs securely from ServiceNow
+    from mcp_server.tools.servicenow import get_sysid_by_query, INSTANCE, USER, PWD
+    import requests
+    from requests.auth import HTTPBasicAuth
+    
+    inc_id = get_sysid_by_query("incident", f"number={ticket_id}")
+    mgr_id = get_sysid_by_query("sys_user", f"email={manager_email}")
+    
+    print(f"   ↳ DEBUG: Ticket SysID: '{inc_id}'")
+    print(f"   ↳ DEBUG: Manager SysID: '{mgr_id}'")
+    
+    if not inc_id or not mgr_id:
+        return f"⚠️ Missing SysID. Ticket='{inc_id}', Manager='{mgr_id}'"
+
+    # 3. CALL THE CUSTOM SCRIPTED REST API
+    # Using the exact namespace '1920142' from your ServiceNow instance
+    approval_url = f"https://{INSTANCE}/api/1920142/teams_bot_api/create_approval"
+    
+    # The payload keys MUST match the variables in your JavaScript exactly!
+    payload = {
+        "manager_sys_id": str(mgr_id).strip(),
+        "incident_sys_id": str(inc_id).strip(),
+        "approval_token": approval_token  # <--- NEW FIELD
+    }
+    
+    headers = {
+        "Content-Type": "application/json", 
+        "Accept": "application/json"
+    }
+    
+    # Send the POST request to your custom endpoint
+    res = requests.post(approval_url, auth=HTTPBasicAuth(USER, PWD), headers=headers, json=payload)
+    
+    # 4. Handle the Response
+    if res.status_code == 201:
+        print(f"   ↳ ✅ Custom API Success! Approval Record Created.")
+        return f"✅ Ticket {ticket_id} placed On Hold. Approval request successfully generated for {manager_email}."
+    else:
+        print(f"   ↳ ❌ Failed to create approval: {res.text}")
+        return f"⚠️ Failed to create approval record: {res.text}"
+
+
+
+
+
+
+@mcp.tool()
+def get_ticket_approval_status(ticket_id: str) -> str:
+    """
+    Checks if the manager has clicked Approve or Reject in the ServiceNow email.
+    Returns: 'requested', 'approved', 'rejected', or 'none'.
+    """
+    status = check_approval_status(ticket_id)
+    print(f"   ↳ 🔎 Checked SNOW approval for {ticket_id}: {status.upper()}")
+    return status
 
 if __name__ == "__main__":
     mcp.run(transport="sse")
