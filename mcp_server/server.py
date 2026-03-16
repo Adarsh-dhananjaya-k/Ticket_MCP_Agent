@@ -26,9 +26,10 @@ def lookup_sla_policy(description: str) -> str:
     return lookup_sla(description)
 
 @mcp.tool()
-def create_ticket(description: str, impact: str = "3", urgency: str = "3", suggested_engineer_email: str = None, assignment_group: str = None) -> str:
+def create_ticket(description: str, impact: str = "3", urgency: str = "3", suggested_engineer_email: str = None, assignment_group: str = None, caller_email: str = None) -> str:
     """
     Creates a ticket in ServiceNow. 
+    Ensure you pass the caller_email of the user requesting help.
     If you know the best assignee and team, provide `suggested_engineer_email` and `assignment_group`.
     For Priority 1 issues (Impact=1, Urgency=1), the system will automatically place the ticket 'On Hold' for manager approval.
     """
@@ -37,7 +38,8 @@ def create_ticket(description: str, impact: str = "3", urgency: str = "3", sugge
         impact=impact, 
         urgency=urgency, 
         suggested_engineer_email=suggested_engineer_email,
-        assignment_group=assignment_group
+        assignment_group=assignment_group,
+        caller_email=caller_email
     )
 
 
@@ -49,29 +51,24 @@ def fetch_new_work() -> str:
 # In server.py
 
 @mcp.tool()
-def update_ticket(ticket_id: str, status: str = None, assigned_to: str = None, comments: str = None) -> str:
+def update_ticket(ticket_id: str, action_by_email: str, status: str = None, assigned_to: str = None, comments: str = None) -> str:
     """
     Update ticket details.
+    IMPORTANT: You MUST pass 'action_by_email' (the email of the user you are currently chatting with).
+    """
+    kwargs = {k: v for k, v in locals().items() if v is not None and k not in["ticket_id", "action_by_email"]}
     
-    IMPORTANT: If status is 'resolved', you MUST provide a 'comments' argument 
-    explaining the resolution (e.g., "Reset password", "Fixed network config").
-    """
-    kwargs = {k: v for k, v in locals().items() if v is not None and k != "ticket_id"}
-    return update_incident(ticket_id, **kwargs)
+    # Pass the user's email down to the ServiceNow logic for security validation
+    return update_incident(ticket_id, action_by_email=action_by_email, **kwargs)
+
 
 @mcp.tool()
-def find_assignee(description: str) -> str:
+def find_assignee(description: str, priority: str = "Standard") -> str:
     """
-    Returns JSON string: {agent_name, agent_email, manager_name, manager_email, ...}
+    Returns JSON string with best agent. Priority should be 'Critical' or 'Standard'.
     """
-    # --- FIX IS HERE: Convert Dict to JSON String ---
-    result_dict = find_best_assignee(description)
+    result_dict = find_best_assignee(description, priority)
     return json.dumps(result_dict)
-
-@mcp.tool()
-def assign_ticket(ticket_id: str, email: str, team: str = None) -> str:
-    # Now it accepts team!
-    return update_incident(ticket_id, assigned_to=email, assignment_group=team, status="Assigned")
 
 
 

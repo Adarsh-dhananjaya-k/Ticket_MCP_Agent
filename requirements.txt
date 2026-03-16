@@ -11,4 +11,5 @@ openpyxl
 botbuilder-core
 botbuilder-schema
 botbuilder-integration-aiohttp
+botbuilder-integration-teams
 aiohttp

@@ -11,6 +11,8 @@ from botbuilder.core import (
     ConversationState
 )
 from botbuilder.schema import ChannelAccount, Activity, ActivityTypes
+from botbuilder.core.teams import TeamsInfo
+from botbuilder.schema import ConversationReference
 
 # Import Agent dependencies
 from mcp import ClientSession
@@ -32,7 +34,7 @@ CLIENT = AsyncAzureOpenAI(
 )
 
 class ITSMBot(ActivityHandler):
-    def __init__(self, conversation_state: ConversationState):
+    def __init__(self, conversation_state: ConversationState, conversation_references: dict):
         """
         Initialize the bot with ConversationState to handle memory.
         """
@@ -42,6 +44,8 @@ class ITSMBot(ActivityHandler):
         self.conversation_state = conversation_state
         # Create an accessor to read/write the "History" key in memory
         self.history_accessor = self.conversation_state.create_property("History")
+
+        self.conversation_references = conversation_references
 
     async def on_turn(self, turn_context: TurnContext):
         """
@@ -60,6 +64,18 @@ class ITSMBot(ActivityHandler):
     async def on_message_activity(self, turn_context: TurnContext):
         """Main Chat Loop with Memory."""
         user_input = turn_context.activity.text
+
+        try:
+            member = await TeamsInfo.get_member(turn_context, turn_context.activity.from_property.id)
+            user_name = member.name or "Unknown User"
+            user_email = member.email or member.user_principal_name or "unknown@email.com"
+        except Exception as e:
+            print(f"Could not fetch Teams user info: {e}")
+            user_name = turn_context.activity.from_property.name
+            user_email = "unknown_external_user@domain.com"
+        
+        conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+        self.conversation_references[user_email] = conversation_reference
         
         # 1. Retrieve Conversation History
         history = await self.history_accessor.get(turn_context, lambda: [])
@@ -68,8 +84,9 @@ class ITSMBot(ActivityHandler):
         if not history:
             history.append({
                 "role": "system", 
-                "content": """
+                "content": f"""
                 You are an intelligent IT Service Desk Assistant for Microsoft Teams.
+                You are currently talking to {user_name} ({user_email}).
                 
                 YOUR CORE WORKFLOW FOR NEW ISSUES:
                 When a user reports a new issue, you MUST follow these exact steps in order:
@@ -82,6 +99,7 @@ class ITSMBot(ActivityHandler):
                 
                 3. CREATE TICKET: Call the 'create_ticket' tool. You MUST pass:
                    - description: Summarize the user's issue clearly.
+                   - caller_email: Pass '{user_email}' exactly as written here.
                    - impact & urgency: Based on step 1.
                    - suggested_engineer_email: From step 2.
                    - assignment_group: The 'team' from step 2.
@@ -91,11 +109,11 @@ class ITSMBot(ActivityHandler):
                 5. INFORM THE USER: 
                    - Give them the resulting Ticket ID.
                    - If it is a P1/Critical ticket, explicitly state: "This is a Critical Priority issue. It has been placed On Hold while an email is sent to the team manager to approve the AI-suggested assignment."
-                   - If it is standard, simply tell them the ticket has been routed to the[Team Name].
+                   - If it is standard, simply tell them the ticket has been routed to the [Team Name].
                 
                 YOUR RULES FOR RESOLVING TICKETS:
                 - If a user says their issue is fixed/resolved, ask for the Ticket ID if they didn't provide one.
-                - Call 'update_ticket' passing the ticket_id, status="resolved", and a brief comment.
+                - Call 'update_ticket' passing the ticket_id, action_by_email (MUST be '{user_email}'), status="resolved", and a brief comment.
                 """
             })
 
