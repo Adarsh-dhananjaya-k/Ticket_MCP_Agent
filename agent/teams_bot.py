@@ -95,7 +95,7 @@ class ITSMBot(ActivityHandler):
                    - Critical = impact "1", urgency "1"
                    - Standard = impact "3", urgency "3"
                    
-                2. FIND ASSIGNEE: Call the 'find_assignee' tool using the issue description. This queries ServiceNow for real-time team workloads and returns the best 'suggested_agent_email' and the 'team'.
+                2. FIND ASSIGNEE: Call the 'find_assignee' tool using the issue description and pass caller_email='{user_email}'. This queries ServiceNow for real-time team workloads and returns the best 'suggested_agent_email' and the 'team'.
                 
                 3. CREATE TICKET: Call the 'create_ticket' tool. You MUST pass:
                    - description: Summarize the user's issue clearly.

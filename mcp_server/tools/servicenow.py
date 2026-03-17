@@ -81,8 +81,14 @@ def get_valid_resolution_codes():
     
     return "Solved (Permanently)" # Fallback
 
-def get_user_sysid(email):
-    return get_sysid_by_query("sys_user", f"email={email}")
+def get_user_sysid(identifier):
+    """
+    Finds a user's SysID by checking if the Teams string matches 
+    EITHER the ServiceNow 'User ID' (user_name) OR the 'Email' (email).
+    """
+    # The ^OR operator in ServiceNow tells it to search both fields!
+    query = f"user_name={identifier}^ORemail={identifier}"
+    return get_sysid_by_query("sys_user", query)
 
 def get_admin_sysid():
     return get_sysid_by_query("sys_user", "user_name=admin")
@@ -160,26 +166,25 @@ def create_incident(short_desc, impact="3", urgency="3", suggested_engineer_emai
     if not is_configured(): return "❌ Config Error"
     url = f"https://{INSTANCE}/api/now/table/incident"
     
+    # --- Caller ID Logic ---
     final_caller_sysid = None
-    
     if caller_email:
-        # 1. Try to find the user in ServiceNow
         found_sysid = get_user_sysid(caller_email)
         if found_sysid:
             final_caller_sysid = found_sysid
         else:
-            # 2. User not found! Prepend their email to the description so it's not lost.
             short_desc = f"[Reported by External: {caller_email}] {short_desc}"
-            final_caller_sysid = get_admin_sysid() # Fallback to Admin
+            final_caller_sysid = get_admin_sysid()
     else:
-        final_caller_sysid = get_admin_sysid() # Fallback if bot forgets
-    
+        final_caller_sysid = get_admin_sysid()
+
     # Default State to 'New' (1)
     target_state = "1"
     
-    # If Critical (Impact=1, Urgency=1), set state to 'On Hold' (3)
-    if str(impact) == "1" and str(urgency) == "1":
-        target_state = "3"
+    # Check if it is Critical
+    is_critical = str(impact) == "1" and str(urgency) == "1"
+    if is_critical:
+        target_state = "3" # On Hold
 
     payload = {
         "short_description": short_desc, 
@@ -188,21 +193,26 @@ def create_incident(short_desc, impact="3", urgency="3", suggested_engineer_emai
         "state": target_state
     }
     
-    if final_caller_sysid: 
-        payload["caller_id"] = final_caller_sysid
+    if final_caller_sysid: payload["caller_id"] = final_caller_sysid
 
-    # Populate standard Team Assignment
+    # Populate Team Assignment
     if assignment_group:
         group_sysid = get_sysid_by_query("sys_user_group", f"name={assignment_group}")
         if group_sysid:
             payload["assignment_group"] = group_sysid
 
-    # Populate AI Suggestion Custom Field
+    # --- 🔥 THE FIX: AUTO-ASSIGNMENT LOGIC 🔥 ---
     if suggested_engineer_email:
         eng_sysid = get_user_sysid(suggested_engineer_email)
         if eng_sysid:
-            # Assumes you have created this custom reference field in SNOW
+            # 1. Always log the AI's suggestion for record-keeping
             payload["u_ai_suggested_engineer"] = eng_sysid
+            
+            # 2. If it is NOT Critical, Auto-Assign it directly!
+            if not is_critical:
+                payload["assigned_to"] = eng_sysid
+                payload["state"] = "2"  # Automatically move it to 'In Progress'
+    # ---------------------------------------------
 
     try:
         res = requests.post(url, auth=HTTPBasicAuth(USER, PWD), json=payload)
@@ -218,33 +228,61 @@ def update_incident(ticket_id, action_by_email=None, **kwargs):
     params = {"sysparm_query": f"number={ticket_id}", "sysparm_display_value": "false"}
     
     try:
+        # 1. Get Incident Data
         res = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params)
         records = res.json().get("result",[])
         if not records: return "Ticket not found"
         
         ticket_data = records[0]
         sys_id = ticket_data["sys_id"]
-
-        # Ensure requester_sysid exists in the scope
         requester_sysid = None
 
-        # --- 🔒 SECURITY CHECK (RBAC) 🔒 ---
+        # --- 🔒 SECURITY CHECK (DYNAMIC RBAC) 🔒 ---
         if action_by_email:
             requester_sysid = get_user_sysid(action_by_email)
             
             if not requester_sysid:
                 return f"❌ Permission Denied: Your email '{action_by_email}' is not registered in ServiceNow."
             
-            # Extract the raw SysIDs from the ticket
+            # A. Get Caller SysID
             caller_sysid = ticket_data.get("caller_id", "")
             if isinstance(caller_sysid, dict): caller_sysid = caller_sysid.get("value", "")
                 
+            # B. Get Assigned Agent SysID
             assigned_sysid = ticket_data.get("assigned_to", "")
             if isinstance(assigned_sysid, dict): assigned_sysid = assigned_sysid.get("value", "")
             
-            # If the requester is NOT the Caller AND NOT the Assigned Agent, block them!
-            if requester_sysid != caller_sysid and requester_sysid != assigned_sysid:
-                return f"❌ Permission Denied: You ({action_by_email}) are not authorized to modify {ticket_id}. Only the Caller or Assigned Agent can do this."
+            # C. Get System Admin SysID (Master Key)
+            admin_sysid = get_admin_sysid()
+
+            # D. Get Group Manager SysID
+            group_manager_sysid = None
+            group_sysid = ticket_data.get("assignment_group", "")
+            if isinstance(group_sysid, dict): group_sysid = group_sysid.get("value", "")
+            
+            if group_sysid:
+                # Query the group table to find the official manager
+                grp_url = f"https://{INSTANCE}/api/now/table/sys_user_group/{group_sysid}"
+                grp_params = {"sysparm_fields": "manager", "sysparm_display_value": "false"}
+                try:
+                    grp_res = requests.get(grp_url, auth=HTTPBasicAuth(USER, PWD), params=grp_params)
+                    manager_data = grp_res.json().get("result", {}).get("manager", "")
+                    if isinstance(manager_data, dict):
+                        group_manager_sysid = manager_data.get("value", "")
+                    else:
+                        group_manager_sysid = manager_data
+                except Exception as e:
+                    print(f"⚠️ Could not fetch group manager: {e}")
+
+            # E. The VIP List
+            authorized_users =[caller_sysid, assigned_sysid, group_manager_sysid, admin_sysid]
+            # Clean up the list to remove empty values
+            authorized_users =[u for u in authorized_users if u]
+
+            # F. The Final Check
+            if requester_sysid not in authorized_users:
+                return f"❌ Permission Denied: You ({action_by_email}) are not authorized to modify {ticket_id}. Only the Caller, Assigned Agent, Team Manager, or System Admin can do this."
+        # -------------------------------------------
 
         payload = {}
         
@@ -257,14 +295,11 @@ def update_incident(ticket_id, action_by_email=None, **kwargs):
                 payload["close_code"] = valid_code
                 payload["close_notes"] = kwargs.get("comments", "Resolved by AI Agent")
                 
-                # --- 🔥 THE FIX IS HERE 🔥 ---
-                # Force ServiceNow to register the ACTUAL user who resolved it, 
-                # instead of the Admin API account!
+                # Force ServiceNow to register the ACTUAL user who resolved it
                 if requester_sysid:
                     payload["resolved_by"] = requester_sysid
-                # -----------------------------
                 
-                # Use caller_sysid variable from earlier (fallback to admin if missing)
+                # Ensure caller ID is populated
                 caller_check = ticket_data.get("caller_id", "")
                 if not caller_check:
                     admin_id = get_admin_sysid()
@@ -276,12 +311,11 @@ def update_incident(ticket_id, action_by_email=None, **kwargs):
             if user_sys_id: payload["assigned_to"] = user_sys_id
             else: return f"❌ Error: User '{email}' not found."
 
-        # --- ASSIGNMENT GROUP LOGIC ---
         if "assignment_group" in kwargs:
             group_name = kwargs["assignment_group"]
-            group_sys_id = get_sysid_by_query("sys_user_group", f"name={group_name}")
-            if group_sys_id: 
-                payload["assignment_group"] = group_sys_id
+            new_group_sys_id = get_sysid_by_query("sys_user_group", f"name={group_name}")
+            if new_group_sys_id: 
+                payload["assignment_group"] = new_group_sys_id
             else: 
                 print(f"⚠️ Warning: Assignment group '{group_name}' not found in SNOW.")
 
@@ -298,27 +332,42 @@ def update_incident(ticket_id, action_by_email=None, **kwargs):
         
     except Exception as e:
         return f"Update Error: {str(e)}"
-
     
 def check_approval_status(ticket_id):
-    """Checks the current status of the approval in ServiceNow."""
     if not is_configured(): return "❌ Config Error"
     
+    # 1. Get the approval status
     inc_sys_id = get_sysid_by_query("incident", f"number={ticket_id}")
     if not inc_sys_id: return "Ticket not found."
     
     url = f"https://{INSTANCE}/api/now/table/sysapproval_approver"
     params = {"sysparm_query": f"sysapproval={inc_sys_id}", "sysparm_limit": 1}
     
+    approval_state = "none"
     try:
         res = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params)
-        data = res.json().get("result",[])
-        if data:
-            # Will return 'requested', 'approved', or 'rejected'
-            return data[0].get("state") 
-        return "none"
+        data = res.json().get("result", [])
+        if data: approval_state = data[0].get("state")
     except Exception as e:
         return f"Error: {str(e)}"
+
+    # 2. Get the ACTUAL assigned user from the Incident table
+    actual_assignee = "Unknown"
+    if approval_state == 'approved':
+        inc_url = f"https://{INSTANCE}/api/now/table/incident/{inc_sys_id}"
+        inc_params = {"sysparm_fields": "assigned_to", "sysparm_display_value": "true"}
+        try:
+            inc_res = requests.get(inc_url, auth=HTTPBasicAuth(USER, PWD), params=inc_params)
+            assigned_data = inc_res.json().get("result", {}).get("assigned_to")
+            if isinstance(assigned_data, dict):
+                actual_assignee = assigned_data.get("display_value", "Unknown")
+        except Exception as e:
+            pass
+
+    # 3. Return a much smarter string to the AI
+    if approval_state == 'approved':
+        return f"Status: approved. The ticket is currently assigned to: {actual_assignee}."
+    return f"Status: {approval_state}."
 
 def test_connection():
     return "✅ Connected" if is_configured() else "❌ Not Configured"

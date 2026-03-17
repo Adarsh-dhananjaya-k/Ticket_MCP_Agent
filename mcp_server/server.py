@@ -63,11 +63,11 @@ def update_ticket(ticket_id: str, action_by_email: str, status: str = None, assi
 
 
 @mcp.tool()
-def find_assignee(description: str, priority: str = "Standard") -> str:
+def find_assignee(description: str, priority: str = "Standard", caller_email: str = None) -> str:
     """
     Returns JSON string with best agent. Priority should be 'Critical' or 'Standard'.
     """
-    result_dict = find_best_assignee(description, priority)
+    result_dict = find_best_assignee(description, priority, caller_email)
     return json.dumps(result_dict)
 
 
