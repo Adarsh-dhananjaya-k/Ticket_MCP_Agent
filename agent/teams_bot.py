@@ -1,102 +1,6 @@
-# import os
-# import json
-# import traceback
-# from botbuilder.core import ActivityHandler, TurnContext, MessageFactory
-# from botbuilder.schema import ChannelAccount, Activity, ActivityTypes
 
-# # Import Agent dependencies
-# from mcp import ClientSession
-# from mcp.client.sse import sse_client
-# from openai import AsyncAzureOpenAI
-# from dotenv import load_dotenv
 
-# load_dotenv()
 
-# # --- CONFIGURATION ---
-# MCP_URL = "http://localhost:8000/sse"
-# DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-
-# # OpenAI Client
-# CLIENT = AsyncAzureOpenAI(
-#     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-#     api_key=os.getenv("AZURE_OPENAI_KEY"),
-#     api_version=os.getenv("AZURE_OPENAI_API_VERSION")
-# )
-
-# class ITSMBot(ActivityHandler):
-#     async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
-#         """Welcomes the user."""
-#         for member in members_added:
-#             if member.id != turn_context.activity.recipient.id:
-#                 await turn_context.send_activity(MessageFactory.text("👋 Hello! Tell me your issue (to create a ticket) or tell me a ticket ID is resolved."))
-
-#     async def on_message_activity(self, turn_context: TurnContext):
-#         """Main Chat Loop."""
-#         user_input = turn_context.activity.text
-        
-#         # Send Typing Indicator
-#         await turn_context.send_activity(Activity(type=ActivityTypes.typing))
-
-#         try:
-#             # Connect to MCP Server
-#             async with sse_client(MCP_URL) as (read, write):
-#                 async with ClientSession(read, write) as session:
-#                     await session.initialize()
-                    
-#                     # A. Load Tools
-#                     tools = await session.list_tools()
-#                     openai_tools = [{"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.inputSchema}} for t in tools.tools]
-
-#                     # B. Prepare Messages (UPDATED SYSTEM PROMPT)
-#                     messages = [
-#                         {"role": "system", "content": """
-#                          You are a Direct IT Support Bot.
-                         
-#                          YOUR RULES:
-#                          1. IF CREATING A TICKET:
-#                             - User reports an issue.
-#                             - First, call 'lookup_sla_policy' to check priority.
-#                             - Then, IMMEDIATELY call 'create_ticket'.
-#                             - Do NOT ask the user for a title. Summarize their message yourself for the 'description' argument.
-#                             - Return the Ticket ID.
-                            
-#                          2. IF RESOLVING A TICKET:
-#                             - User says a ticket is fixed/resolved.
-#                             - Call 'update_incident' (or the available update tool) to set the status to 'Resolved'.
-#                             - If the user didn't provide the Ticket ID (e.g., INC1234), ask for it.
-#                          """},
-#                         {"role": "user", "content": user_input}
-#                     ]
-
-#                     # C. Thinking Loop
-#                     while True:
-#                         response = await CLIENT.chat.completions.create(
-#                             model=DEPLOYMENT, messages=messages, tools=openai_tools, tool_choice="auto"
-#                         )
-#                         msg = response.choices[0].message
-                        
-#                         # CASE 1: Agent speaks to User
-#                         if not msg.tool_calls:
-#                             await turn_context.send_activity(MessageFactory.text(msg.content))
-#                             break
-                        
-#                         # CASE 2: Agent uses Tools
-#                         messages.append(msg)
-#                         for tool in msg.tool_calls:
-#                             # Notify Teams User
-#                             await turn_context.send_activity(MessageFactory.text(f"⚙️ Action: `{tool.function.name}`..."))
-                            
-#                             args = json.loads(tool.function.arguments)
-#                             result = await session.call_tool(tool.function.name, arguments=args)
-                            
-#                             messages.append({
-#                                 "role": "tool", "tool_call_id": tool.id, 
-#                                 "name": tool.function.name, "content": result.content[0].text
-#                             })
-
-#         except Exception as e:
-#             print(f"❌ Error: {e}")
-#             await turn_context.send_activity(MessageFactory.text(f"⚠️ Error: {str(e)}"))
 
 import os
 import json
@@ -107,6 +11,8 @@ from botbuilder.core import (
     ConversationState
 )
 from botbuilder.schema import ChannelAccount, Activity, ActivityTypes
+from botbuilder.core.teams import TeamsInfo
+from botbuilder.schema import ConversationReference
 
 # Import Agent dependencies
 from mcp import ClientSession
@@ -128,7 +34,7 @@ CLIENT = AsyncAzureOpenAI(
 )
 
 class ITSMBot(ActivityHandler):
-    def __init__(self, conversation_state: ConversationState):
+    def __init__(self, conversation_state: ConversationState, conversation_references: dict):
         """
         Initialize the bot with ConversationState to handle memory.
         """
@@ -138,6 +44,8 @@ class ITSMBot(ActivityHandler):
         self.conversation_state = conversation_state
         # Create an accessor to read/write the "History" key in memory
         self.history_accessor = self.conversation_state.create_property("History")
+
+        self.conversation_references = conversation_references
 
     async def on_turn(self, turn_context: TurnContext):
         """
@@ -156,30 +64,60 @@ class ITSMBot(ActivityHandler):
     async def on_message_activity(self, turn_context: TurnContext):
         """Main Chat Loop with Memory."""
         user_input = turn_context.activity.text
+
+        try:
+            member = await TeamsInfo.get_member(turn_context, turn_context.activity.from_property.id)
+            user_name = member.name or "Unknown User"
+            user_email = member.email or member.user_principal_name or "unknown@email.com"
+        except Exception as e:
+            print(f"Could not fetch Teams user info: {e}")
+            user_name = turn_context.activity.from_property.name
+            user_email = "unknown_external_user@domain.com"
+        
+        conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+        self.conversation_references[user_email] = conversation_reference
         
         # 1. Retrieve Conversation History
-        # FIX: Removed 'default=' keyword. We pass a lambda to return an empty list if no history exists.
         history = await self.history_accessor.get(turn_context, lambda: [])
 
         # 2. If History is empty, inject System Prompt
         if not history:
             history.append({
                 "role": "system", 
-                "content": """
-                You are a Direct IT Support Bot.
+                "content": f"""
+                You are an intelligent IT Service Desk Assistant for Microsoft Teams.
+                You are currently talking to {user_name} ({user_email}).
                 
-                YOUR RULES:
-                1. IF CREATING A TICKET:
-                   - User reports an issue.
-                   - First, call 'lookup_sla_policy' to check priority.
-                   - Then, IMMEDIATELY call 'create_ticket'.
-                   - Do NOT ask the user for a title. Summarize their message yourself.
-                   - Return the Ticket ID.
-                   
-                2. IF RESOLVING A TICKET:
-                   - User says a ticket is fixed/resolved.
-                   - Call 'update_incident' (or update tool).
-                   - If Ticket ID is missing, ask for it.
+                YOUR CORE WORKFLOW FOR NEW ISSUES:
+                When a user reports a new issue, you MUST follow these exact steps in order:
+                
+                1. CHECK PRIORITY: Call the 'lookup_sla_policy' tool using the user's description to determine if this is Critical (P1) or Standard. 
+                2. FIND ASSIGNEE: Call the 'find_assignee' tool using the issue description and pass caller_email='{user_email}'. This queries ServiceNow for real-time team workloads.
+                3. CREATE TICKET: Call the 'create_ticket' tool. You MUST pass:
+                   - description: Summarize the user's issue clearly.
+                   - caller_email: Pass '{user_email}' exactly as written here.
+                   - impact & urgency: Based on step 1.
+                   - suggested_engineer_email: From step 2.
+                   - assignment_group: The 'team' from step 2.
+                4. IF P1/CRITICAL: You MUST immediately call the request_manager_approval tool using the returned manager_email, agent_email, team, and ticket_id to trigger the email.
+                5. INFORM THE USER: 
+                   - Give them the resulting Ticket ID.
+                   - If it is a P1/Critical ticket, state: "This is a Critical Priority issue. It has been placed On Hold while an email is sent to the team manager to approve the AI-suggested assignment."
+                   - If standard, tell them the ticket has been routed to the [Team Name].
+                
+                YOUR RULES FOR CHECKING TICKET DETAILS & STATUS (CRITICAL!):
+                - NEVER guess or rely on chat history to state who the Caller, Assignee, or Assignment Group is.
+                - If the user asks for ticket details, who the caller is, or who it is assigned to, you MUST call 'list_tickets' passing the ticket_id to get the live data.
+                - If the user asks if a ticket is approved, call 'get_ticket_approval_status'. The manager may have chosen a DIFFERENT agent than the one you suggested. ALWAYS read the assignee returned by this tool and report that to the user.
+                - If the user asks how many tickets a specific TEAM has, call 'list_tickets' and pass the 'assignment_group' parameter.
+                - If the user asks how many tickets a specific AGENT has, call the 'check_agent_workload' tool passing their email.
+                
+                YOUR RULES FOR RESOLVING TICKETS:
+                - If a user says they fixed an issue or want to resolve a ticket, you MUST call the 'update_ticket' tool.
+                - You MUST pass the 'ticket_id'.
+                - You MUST pass 'action_by_email' exactly as '{user_email}'.
+                - You MUST pass 'status="resolved"'.
+                - You MUST pass 'comments' summarizing their resolution notes.
                 """
             })
 
@@ -215,11 +153,9 @@ class ITSMBot(ActivityHandler):
                             break
                         
                         # CASE 2: Agent uses Tools
-                        await turn_context.send_activity(MessageFactory.text("⚙️ Processing..."))
-
                         for tool in msg.tool_calls:
-                            # Notify Teams User (Optional, good for UX)
-                            # await turn_context.send_activity(MessageFactory.text(f"Action: {tool.function.name}"))
+                            # --- CHANGED HERE: Send specific tool name to Teams ---
+                            await turn_context.send_activity(MessageFactory.text(f"⚙️ Calling tool: {tool.function.name}..."))
                             
                             args = json.loads(tool.function.arguments)
                             result = await session.call_tool(tool.function.name, arguments=args)
@@ -238,3 +174,5 @@ class ITSMBot(ActivityHandler):
         except Exception as e:
             print(f"❌ Error: {e}")
             await turn_context.send_activity(MessageFactory.text(f"⚠️ Error: {str(e)}"))
+
+
