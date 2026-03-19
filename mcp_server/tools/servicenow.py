@@ -120,37 +120,45 @@ def get_tickets(query_params=None):
     if not is_configured(): return "❌ ServiceNow is NOT configured."
     url = f"https://{INSTANCE}/api/now/table/incident"
     
-    # sysparm_display_value=true ensures we get names like "Karen User" instead of 32-character sys_ids
+    # sysparm_display_value=true ensures we get names instead of sys_ids
     params = {"sysparm_limit": 20, "sysparm_display_value": "true"}
     
     if query_params:
-        q_strings =[f"{k}={v}" for k, v in query_params.items()]
+        q_strings = [f"{k}={v}" for k, v in query_params.items()]
         params["sysparm_query"] = "^".join(q_strings)
         
     try:
         response = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params)
-        results = response.json().get("result",[])
+        results = response.json().get("result", [])
         
         tickets_list =[]
         for r in results:
-            # Safely extract assigned_to (ServiceNow sometimes returns a dict here)
+            # Safely extract assigned_to
             assigned = r.get("assigned_to", "Unassigned")
-            if isinstance(assigned, dict): 
-                assigned = assigned.get("display_value", "Unassigned")
+            if isinstance(assigned, dict): assigned = assigned.get("display_value", "Unassigned")
                 
             # Safely extract resolved_by
             resolved = r.get("resolved_by", "Unknown")
-            if isinstance(resolved, dict): 
-                resolved = resolved.get("display_value", "Unknown")
+            if isinstance(resolved, dict): resolved = resolved.get("display_value", "Unknown")
+
+            # 🔥 NEW: Safely extract caller_id
+            caller = r.get("caller_id", "Unknown")
+            if isinstance(caller, dict): caller = caller.get("display_value", "Unknown")
+
+            # 🔥 NEW: Safely extract assignment_group
+            group = r.get("assignment_group", "Unassigned")
+            if isinstance(group, dict): group = group.get("display_value", "Unassigned")
                 
             tickets_list.append({
                 "id": r["number"], 
                 "desc": r["short_description"], 
                 "status": r["state"], 
                 "priority": r["priority"],
+                "caller_id": caller,              # <--- Added
+                "assignment_group": group,        # <--- Added
                 "assigned_to": assigned,
                 "resolved_by": resolved,
-                "resolution_notes": r.get("close_notes", "") # Gives the AI context on HOW it was fixed
+                "resolution_notes": r.get("close_notes", "")
             })
             
         return tickets_list

@@ -92,28 +92,32 @@ class ITSMBot(ActivityHandler):
                 When a user reports a new issue, you MUST follow these exact steps in order:
                 
                 1. CHECK PRIORITY: Call the 'lookup_sla_policy' tool using the user's description to determine if this is Critical (P1) or Standard. 
-                   - Critical = impact "1", urgency "1"
-                   - Standard = impact "3", urgency "3"
-                   
-                2. FIND ASSIGNEE: Call the 'find_assignee' tool using the issue description and pass caller_email='{user_email}'. This queries ServiceNow for real-time team workloads and returns the best 'suggested_agent_email' and the 'team'.
-                
+                2. FIND ASSIGNEE: Call the 'find_assignee' tool using the issue description and pass caller_email='{user_email}'. This queries ServiceNow for real-time team workloads.
                 3. CREATE TICKET: Call the 'create_ticket' tool. You MUST pass:
                    - description: Summarize the user's issue clearly.
                    - caller_email: Pass '{user_email}' exactly as written here.
                    - impact & urgency: Based on step 1.
                    - suggested_engineer_email: From step 2.
                    - assignment_group: The 'team' from step 2.
-                
                 4. IF P1/CRITICAL: You MUST immediately call the request_manager_approval tool using the returned manager_email, agent_email, team, and ticket_id to trigger the email.
-                   
                 5. INFORM THE USER: 
                    - Give them the resulting Ticket ID.
-                   - If it is a P1/Critical ticket, explicitly state: "This is a Critical Priority issue. It has been placed On Hold while an email is sent to the team manager to approve the AI-suggested assignment."
-                   - If it is standard, simply tell them the ticket has been routed to the [Team Name].
+                   - If it is a P1/Critical ticket, state: "This is a Critical Priority issue. It has been placed On Hold while an email is sent to the team manager to approve the AI-suggested assignment."
+                   - If standard, tell them the ticket has been routed to the [Team Name].
+                
+                YOUR RULES FOR CHECKING TICKET DETAILS & STATUS (CRITICAL!):
+                - NEVER guess or rely on chat history to state who the Caller, Assignee, or Assignment Group is.
+                - If the user asks for ticket details, who the caller is, or who it is assigned to, you MUST call 'list_tickets' passing the ticket_id to get the live data.
+                - If the user asks if a ticket is approved, call 'get_ticket_approval_status'. The manager may have chosen a DIFFERENT agent than the one you suggested. ALWAYS read the assignee returned by this tool and report that to the user.
+                - If the user asks how many tickets a specific TEAM has, call 'list_tickets' and pass the 'assignment_group' parameter.
+                - If the user asks how many tickets a specific AGENT has, call the 'check_agent_workload' tool passing their email.
                 
                 YOUR RULES FOR RESOLVING TICKETS:
-                - If a user says their issue is fixed/resolved, ask for the Ticket ID if they didn't provide one.
-                - Call 'update_ticket' passing the ticket_id, action_by_email (MUST be '{user_email}'), status="resolved", and a brief comment.
+                - If a user says they fixed an issue or want to resolve a ticket, you MUST call the 'update_ticket' tool.
+                - You MUST pass the 'ticket_id'.
+                - You MUST pass 'action_by_email' exactly as '{user_email}'.
+                - You MUST pass 'status="resolved"'.
+                - You MUST pass 'comments' summarizing their resolution notes.
                 """
             })
 
