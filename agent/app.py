@@ -1,8 +1,6 @@
-
-
-
 import sys
 import os
+import json
 import traceback
 from aiohttp import web
 from botbuilder.core import (
@@ -14,10 +12,15 @@ from botbuilder.core import (
 from botbuilder.schema import Activity
 from dotenv import load_dotenv
 
-# Import the bot logic
+# Import the bot logic and DB
 from agent.teams_bot import ITSMBot
+from agent.db import init_db, get_recent_logs
+from agent.blob_storage import EntraIdBlobStorage
 
 load_dotenv()
+
+# 🚀 INIT DB
+init_db()
 
 # --- 1. LOAD CREDENTIALS ---
 APP_ID = os.getenv("MICROSOFT_APP_ID")
@@ -25,8 +28,7 @@ APP_PASSWORD = os.getenv("MICROSOFT_APP_PASSWORD")
 TENANT_ID = os.getenv("MICROSOFT_APP_TENANT_ID")
 
 if not all([APP_ID, APP_PASSWORD, TENANT_ID]):
-    print("❌ ERROR: Missing Azure Bot credentials in .env")
-    print("Ensure MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD, and MICROSOFT_APP_TENANT_ID are set.")
+    print("❌ Missing Azure Bot credentials")
     sys.exit(1)
 
 # --- 2. SETUP ADAPTER ---
@@ -38,19 +40,43 @@ SETTINGS = BotFrameworkAdapterSettings(
 
 ADAPTER = BotFrameworkAdapter(SETTINGS)
 
-# --- 3. SETUP MEMORY (CONTEXT) ---
-# MemoryStorage keeps data in RAM. Restarting the app clears the memory.
-MEMORY = MemoryStorage()
-CONVERSATION_STATE = ConversationState(MEMORY)
+# --- 3. BOT STATE (AZURE BLOB) ---
+STORAGE_URL = os.getenv("AZURE_STORAGE_ACCOUNT_URL")
+CONTAINER_NAME = os.getenv("BLOB_CONTAINER_NAME", "bot-state")
 
-# --- 4. INITIALIZE BOT WITH STATE ---
+if STORAGE_URL:
+    print(f"✅ Using Azure Blob Storage for state: {STORAGE_URL}")
+    STORAGE = EntraIdBlobStorage(account_url=STORAGE_URL, container_name=CONTAINER_NAME)
+else:
+    print("⚠️ WARNING: Falling back to Memory Storage! Active chats will be lost on restart.")
+    STORAGE = MemoryStorage()
 
+CONVERSATION_STATE = ConversationState(STORAGE)
+
+# --- 4. BOT ---
 CONVERSATION_REFERENCES = dict()
-
-# We pass the conversation_state to the bot so it can save/read history.
 BOT = ITSMBot(CONVERSATION_STATE, CONVERSATION_REFERENCES)
 
-# --- 5. WEBHOOK HANDLER ---
+# =========================================================
+# 🚨 CRITICAL FIX: GLOBAL MIDDLEWARE FOR TEAMS IFRAME
+# =========================================================
+
+@web.middleware
+async def teams_iframe_middleware(request, handler):
+    response = await handler(request)
+
+    # 🚀 FIX FOR ERR_INVALID_RESPONSE:
+    # Only inject iframe headers into the HTML page. 
+    # Injecting headers into static FileResponses (.js, .css) corrupts the stream!
+    if response.content_type == "text/html":
+        response.headers["Content-Security-Policy"] = (
+            "frame-ancestors 'self' https://teams.microsoft.com https://*.teams.microsoft.com https://*.skype.com https://teams.cloud.microsoft https://*.cloud.microsoft;"
+        )
+        response.headers.pop("X-Frame-Options", None)
+
+    return response
+
+# --- 5. BOT ENDPOINT ---
 async def messages(req: web.Request) -> web.Response:
     if "application/json" in req.headers.get("Content-Type", ""):
         body = await req.json()
@@ -64,50 +90,107 @@ async def messages(req: web.Request) -> web.Response:
         await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
         return web.Response(status=201)
     except Exception as exception:
-        print(f"❌ Error processing request: {exception}")
+        print(f"❌ Error: {exception}")
         traceback.print_exc()
         return web.Response(status=500)
-    
-# --- NEW: PROACTIVE NOTIFICATION WEBHOOK ---
+
+# --- 6. PROACTIVE NOTIFICATION ---
 async def notify(req: web.Request) -> web.Response:
-    """ServiceNow will POST to this URL when a ticket is resolved."""
     try:
         body = await req.json()
         target_email = body.get("user_email")
         message_text = body.get("message")
 
-        # Find the active chat for this user
         conversation_reference = CONVERSATION_REFERENCES.get(target_email)
 
         if not conversation_reference:
-            print(f"⚠️ No active chat found in memory for {target_email}")
-            return web.Response(status=404, text=f"No active chat found for {target_email}")
+            return web.Response(status=404, text="No active chat found")
 
-        # Helper to send the message into Teams
         async def send_proactive_message(turn_context):
             await turn_context.send_activity(message_text)
 
-        # Tell the Bot Adapter to push the message!
         await ADAPTER.continue_conversation(
             conversation_reference, 
             send_proactive_message, 
             APP_ID
         )
+
         return web.Response(status=200, text="Notification Sent!")
-        
+
     except Exception as e:
-        print(f"❌ Notification Error: {e}")
         return web.Response(status=500, text=str(e))
 
-# --- 6. INITIALIZE WEB APP ---
-# (This was missing in the previous version)
-app = web.Application()
+# =========================================================
+# 🚀 ADMIN DASHBOARD
+# =========================================================
+# 1. Get the folder app.py is in (the 'agent' folder)
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Go UP one level to the root 'TICKET_MCP_AGENT' folder
+ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+
+# 3. Now point to admin-ui
+REACT_DIST_DIR = os.path.join(ROOT_DIR, "admin-ui", "dist")
+
+async def serve_react_app(req: web.Request) -> web.Response:
+    try:
+        index_path = os.path.join(REACT_DIST_DIR, "index.html")
+        with open(index_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        return web.Response(text=html, content_type="text/html")
+    except Exception as e:
+        return web.Response(status=404, text=f"React build not found. Path checked: {index_path}. Error: {str(e)}")
+    
+async def api_get_logs(req: web.Request) -> web.Response:
+    logs = get_recent_logs(100)
+    return web.json_response(logs)
+
+async def api_get_config(req: web.Request) -> web.Response:
+    try:
+        with open("mcp_config.json", "r") as f:
+            return web.json_response(json.load(f))
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+async def api_update_config(req: web.Request) -> web.Response:
+    try:
+        data = await req.json()
+
+        with open("mcp_config.json", "w") as f:
+            json.dump(data, f, indent=4)
+
+        BOT.mcp_config = data
+        return web.json_response({"status": "success"})
+
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+# =========================================================
+# --- APP INIT
+# =========================================================
+
+app = web.Application(middlewares=[teams_iframe_middleware])
+
 app.router.add_post("/api/messages", messages)
 app.router.add_post("/api/notify", notify)
 
+# --- 🟢 REACT FRONTEND ROUTES 🟢 ---
+app.router.add_get("/admin", serve_react_app)
+
+# 🚀 THE FIX: Use absolute OS paths to serve the assets folder safely
+assets_path = os.path.join(REACT_DIST_DIR, "assets")
+if os.path.exists(assets_path):
+    app.router.add_static("/assets", path=assets_path, name="assets")
+else:
+    print(f"⚠️ WARNING: React assets folder not found at {assets_path}. Did you run 'npm run build'?")
+
+# --- BACKEND API ROUTES ---
+app.router.add_get("/api/admin/logs", api_get_logs)
+app.router.add_get("/api/admin/config", api_get_config)
+app.router.add_post("/api/admin/config", api_update_config)
+
+# =========================================================
+
 if __name__ == "__main__":
-    try:
-        print(f"🚀 Teams Bot running on http://localhost:3978")
-        web.run_app(app, host="localhost", port=3978)
-    except Exception as error:
-        raise error
+    print("🚀 Running on http://localhost:3978")
+    web.run_app(app, host="0.0.0.0", port=3978)

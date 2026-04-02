@@ -1,0 +1,22 @@
+{
+    "mcp_servers": [
+        {
+            "name": "servicenow_tools",
+            "url": "http://localhost:8000/sse",
+            "enabled": true,
+            "description": "Handles ticket CRUD and Roster lookups"
+        },
+        {
+            "name": "azure_utilities",
+            "url": "http://localhost:8001/sse",
+            "enabled": true,
+            "description": "Handles AI Search and SLA lookups"
+        },
+        {
+            "name": "legacy_onprem_db",
+            "url": "http://localhost:8002/sse",
+            "enabled": false,
+            "description": "Currently disabled for maintenance"
+        }
+    ]
+}

@@ -105,7 +105,9 @@ Ensure `roster.xlsx` and `teams_mapping.xlsx` exist in the `data/` folder.
 **3. Start the MCP Server:**
 Open a terminal and start the tool server (runs on port 8000 via SSE).
 ```bash
-python server.py
+python -m mcp_server.azure_server
+
+python -m mcp_server.servicenow_server
 ```
 
 **4. Start the Teams Bot:**
