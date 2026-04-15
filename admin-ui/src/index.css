@@ -1,7 +1,5 @@
-/* Global reset — MUI handles all component styles */
-*, *::before, *::after {
-  box-sizing: border-box;
-}
+/* Global reset */
+*, *::before, *::after { box-sizing: border-box; }
 
 html, body, #root {
   margin: 0;
@@ -14,43 +12,40 @@ body {
   font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #F0EFF4;
+  background-color: #18181B;
 }
 
-#root {
-  display: flex;
-  flex-direction: column;
-}
+#root { display: flex; flex-direction: column; }
 
-/* ── Scrollbar styling ─────────────────────────────────────────── */
-::-webkit-scrollbar         { width: 6px; height: 6px; }
-::-webkit-scrollbar-track   { background: #F3F2F1; }
-::-webkit-scrollbar-thumb   { background: #C1BEDB; border-radius: 3px; }
+/* ── Dark scrollbars ─────────────────────────────────────────── */
+::-webkit-scrollbar         { width: 5px; height: 5px; }
+::-webkit-scrollbar-track   { background: #18181B; }
+::-webkit-scrollbar-thumb   { background: #3F3F46; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #6264A7; }
 
-/* ── Chat bubble container smooth scroll ───────────────────────── */
-.chat-scroll {
-  scroll-behavior: smooth;
+/* ── Chat smooth scroll ──────────────────────────────────────── */
+.chat-scroll { scroll-behavior: smooth; }
+
+/* ── Pulse animations ────────────────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1;   transform: scale(1);   }
+  50%       { opacity: 0.5; transform: scale(1.35); }
+}
+.pulseDot {
+  display: inline-block;
+  animation: pulse-dot 1.7s ease-in-out infinite;
 }
 
-/* ── Session sidebar hover transition ──────────────────────────── */
-.session-user-row {
-  transition: background-color 0.16s ease, border-left-color 0.16s ease;
+/* ── Refresh spin ────────────────────────────────────────────── */
+@keyframes spin-once {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
+.spinning { animation: spin-once 0.7s linear; }
 
-/* ── Pulse animation for live indicators ───────────────────────── */
-@keyframes liveRing {
-  0%   { box-shadow: 0 0 0 0 rgba(19, 161, 14, 0.5); }
-  70%  { box-shadow: 0 0 0 6px rgba(19, 161, 14, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(19, 161, 14, 0); }
+/* ── Fade-in-up for cards ────────────────────────────────────── */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-
-.live-pulse {
-  animation: liveRing 1.8s ease-in-out infinite;
-}
-
-/* ── KPI card entry animation stagger ──────────────────────────── */
-.kpi-card-1 { animation-delay: 0.05s; }
-.kpi-card-2 { animation-delay: 0.10s; }
-.kpi-card-3 { animation-delay: 0.15s; }
-.kpi-card-4 { animation-delay: 0.20s; }
+.fadeInUp { animation: fade-in-up 0.32s ease both; }

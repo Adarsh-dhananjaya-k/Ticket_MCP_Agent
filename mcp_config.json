@@ -11,12 +11,6 @@
             "url": "http://localhost:8001/sse",
             "enabled": true,
             "description": "Handles AI Search and SLA lookups"
-        },
-        {
-            "name": "legacy_onprem_db",
-            "url": "http://localhost:8002/sse",
-            "enabled": false,
-            "description": "Currently disabled for maintenance"
         }
     ]
 }

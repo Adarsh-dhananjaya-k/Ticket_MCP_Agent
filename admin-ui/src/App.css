@@ -5,6 +5,12 @@
   50%       { opacity: 0.6; transform: scale(1.3); }
 }
 
+/* MCP card status dot — used via inline animation string in sx props */
+@keyframes mcp-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  50%       { box-shadow: 0 0 0 4px transparent; opacity: 0.75; }
+}
+
 @keyframes spin-once {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
