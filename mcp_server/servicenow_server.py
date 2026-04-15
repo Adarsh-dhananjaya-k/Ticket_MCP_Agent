@@ -5,7 +5,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp_server.tools.roster import find_best_assignee
 from mcp_server.tools.servicenow import (
     get_sysid_by_query, get_user_sysid, get_agent_workload,
-    create_incident, update_incident, get_tickets, check_approval_status
+    create_incident, update_incident, get_tickets, check_approval_status,upload_user_image_to_ticket,search_active_issues 
 )
 
 # 🚀 FIX: Pass host and port into the FastMCP constructor!
@@ -42,7 +42,7 @@ def create_ticket(description: str, impact: str = "3", urgency: str = "3", sugge
     return create_incident(description, impact=impact, urgency=urgency, suggested_engineer_email=suggested_engineer_email, assignment_group=assignment_group, caller_email=caller_email)
 
 @mcp.tool()
-def update_ticket(ticket_id: str, action_by_email: str, status: str = None, assigned_to: str = None, comments: str = None) -> str:
+def update_ticket(ticket_id: str, action_by_email: str, status: str = None, assigned_to: str = None, comments: str = None, add_to_watchlist: bool = False) -> str: # 🚀 ADDED add_to_watchlist
     kwargs = {k: v for k, v in locals().items() if v is not None and k not in["ticket_id", "action_by_email"]}
     return update_incident(ticket_id, action_by_email=action_by_email, **kwargs)
 
@@ -94,6 +94,22 @@ def request_manager_approval(agent_email: str, manager_email: str, team: str, ti
 @mcp.tool()
 def get_ticket_approval_status(ticket_id: str) -> str:
     return check_approval_status(ticket_id)
+
+@mcp.tool()
+def attach_image_to_ticket(ticket_id: str, caller_email: str) -> str:
+    """
+    ALWAYS call this immediately after creating a ticket if the user previously uploaded an image or screenshot.
+    Uploads the user's most recently shared image to the specified ServiceNow ticket.
+    """
+    return upload_user_image_to_ticket(ticket_id, caller_email)
+
+@mcp.tool()
+def check_active_outages(keyword: str) -> str:
+    """
+    Searches ServiceNow for currently active/open incidents matching a specific keyword (e.g., 'React', 'VPN', 'Outlook').
+    Use this to check for duplicate global issues before creating a new ticket.
+    """
+    return search_active_issues(keyword)
 
 if __name__ == "__main__":
     print("🚀 Starting ServiceNow MCP Server on port 8000...")
