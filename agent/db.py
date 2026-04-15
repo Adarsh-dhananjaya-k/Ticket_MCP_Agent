@@ -100,6 +100,36 @@ def get_stats():
         "tool_usage":    tool_usage,
     }
 
+def get_weekly_tickets():
+    """Returns per-day ticket tool-call counts for the last 7 days (newest last)."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    # Build a list of the last 7 days (UTC)
+    today = datetime.utcnow().date()
+    days = [(today - timedelta(days=i)) for i in range(6, -1, -1)]  # Mon…Sun order
+
+    result = []
+    for d in days:
+        day_start = d.strftime('%Y-%m-%d') + 'T00:00:00Z'
+        day_end   = d.strftime('%Y-%m-%d') + 'T23:59:59Z'
+        c.execute(
+            """SELECT COUNT(*) FROM chat_logs
+               WHERE role = 'tool'
+                 AND (tool_name LIKE '%ticket%' OR tool_name LIKE '%incident%' OR tool_name LIKE '%create%')
+                 AND timestamp >= ? AND timestamp <= ?""",
+            (day_start, day_end)
+        )
+        count = c.fetchone()[0]
+        result.append({
+            "day":   d.strftime('%a'),   # e.g. "Mon"
+            "date":  d.isoformat(),      # e.g. "2026-04-15"
+            "count": count,
+        })
+
+    conn.close()
+    return result
+
 def get_sessions(per_user_limit: int = 500):
     """Returns chat logs grouped by user_email, sorted by most recent activity."""
     conn = sqlite3.connect(DB_PATH)

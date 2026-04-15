@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 # Import the bot logic and DB
 from agent.teams_bot import ITSMBot
-from agent.db import init_db, get_recent_logs, get_stats, get_sessions
+from agent.db import init_db, get_recent_logs, get_stats, get_sessions, get_weekly_tickets
 from agent.blob_storage import EntraIdBlobStorage
 
 load_dotenv()
@@ -179,6 +179,13 @@ async def api_get_sessions(req: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
+async def api_get_weekly_tickets(req: web.Request) -> web.Response:
+    """Per-day ticket counts for the last 7 days (bar chart)."""
+    try:
+        return web.json_response(get_weekly_tickets())
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
 # =========================================================
 # --- APP INIT
 # =========================================================
@@ -202,8 +209,9 @@ else:
 app.router.add_get("/api/admin/logs",     api_get_logs)
 app.router.add_get("/api/admin/config",   api_get_config)
 app.router.add_post("/api/admin/config",  api_update_config)
-app.router.add_get("/api/admin/stats",    api_get_stats)
-app.router.add_get("/api/admin/sessions", api_get_sessions)
+app.router.add_get("/api/admin/stats",          api_get_stats)
+app.router.add_get("/api/admin/sessions",       api_get_sessions)
+app.router.add_get("/api/admin/weekly-tickets", api_get_weekly_tickets)
 
 # =========================================================
 
