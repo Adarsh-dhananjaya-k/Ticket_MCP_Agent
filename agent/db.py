@@ -19,18 +19,26 @@ def init_db():
             tool_name TEXT
         )
     ''')
+    
+    # Safely migrate existing tables by adding token tracking columns if they don't exist
+    for col in ["prompt_tokens", "completion_tokens", "total_tokens"]:
+        try:
+            c.execute(f"ALTER TABLE chat_logs ADD COLUMN {col} INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
     conn.commit()
     conn.close()
     print("✅ Database initialized at", DB_PATH)
 
-def log_interaction(user_email: str, role: str, message: str, tool_name: str = None):
+def log_interaction(user_email: str, role: str, message: str, tool_name: str = None, prompt_tokens: int = 0, completion_tokens: int = 0, total_tokens: int = 0):
     """Logs a single message or tool execution to the database."""
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute(
-            "INSERT INTO chat_logs (timestamp, user_email, role, message, tool_name) VALUES (?, ?, ?, ?, ?)",
-            (datetime.utcnow().isoformat() + "Z", user_email, role, message, tool_name)
+            "INSERT INTO chat_logs (timestamp, user_email, role, message, tool_name, prompt_tokens, completion_tokens, total_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.utcnow().isoformat() + "Z", user_email, role, message, tool_name, prompt_tokens, completion_tokens, total_tokens)
         )
         conn.commit()
         conn.close()
@@ -164,3 +172,153 @@ def get_sessions(per_user_limit: int = 500):
 
     conn.close()
     return sessions
+
+def get_snow_stats():
+    import requests
+    from requests.auth import HTTPBasicAuth
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    INSTANCE = os.getenv("SNOW_INSTANCE")
+    USER = os.getenv("SNOW_USER")
+    PWD = os.getenv("SNOW_PASSWORD")
+
+    if not INSTANCE:
+        return {"created": 0, "on_hold": 0, "resolved": 0}
+
+    instance_clean = INSTANCE.replace("https://", "").replace("http://", "").strip("/")
+    url = f"https://{instance_clean}/api/now/stats/incident"
+    params = {"sysparm_count": "true", "sysparm_group_by": "state"}
+
+    stats = {"new": 0, "in_progress": 0, "on_hold": 0, "resolved": 0}
+
+    try:
+        res = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params, timeout=10)
+        if res.status_code == 200:
+            result = res.json().get("result", [])
+            for row in result:
+                fields = row.get("groupby_fields", [])
+                if not fields:
+                    continue
+                state_val = fields[0].get("value")
+                count = int(row.get("stats", {}).get("count", 0))
+                if state_val == "1":
+                    stats["new"] += count
+                elif state_val == "2":
+                    stats["in_progress"] += count
+                elif state_val == "3":
+                    stats["on_hold"] += count
+                elif state_val in ["6", "7"]:
+                    stats["resolved"] += count
+    except Exception as e:
+        print(f"⚠️ Error fetching SNOW stats: {e}")
+
+    return stats
+
+def get_snow_assignment_groups():
+    """Returns incident counts grouped by assignment_group+state from ServiceNow."""
+    import requests
+    from requests.auth import HTTPBasicAuth
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    INSTANCE = os.getenv("SNOW_INSTANCE", "").replace("https://", "").replace("http://", "").strip("/")
+    USER = os.getenv("SNOW_USER")
+    PWD = os.getenv("SNOW_PASSWORD")
+
+    if not INSTANCE:
+        return []
+
+    url = f"https://{INSTANCE}/api/now/stats/incident"
+    params = {
+        "sysparm_count": "true",
+        "sysparm_group_by": "assignment_group,state",
+        "sysparm_display_value": "true",
+        "sysparm_limit": 500,
+    }
+
+    # state value -> label map
+    STATE_LABELS = {
+        "1": "New", "2": "In Progress", "3": "On Hold",
+        "6": "Resolved", "7": "Closed", "8": "Canceled"
+    }
+
+    # dict: { group_name: { state_label: count } }
+    groups_map = {}
+    try:
+        res = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params, timeout=15)
+        if res.status_code == 200:
+            for row in res.json().get("result", []):
+                fields = row.get("groupby_fields", [])
+                if len(fields) < 2:
+                    continue
+
+                # Field 0 = assignment_group, Field 1 = state
+                raw_group = fields[0].get("display_value") or fields[0].get("value") or ""
+                group_name = raw_group.strip() or "(empty)"
+
+                state_val  = fields[1].get("value", "")
+                state_label = STATE_LABELS.get(state_val, f"State {state_val}")
+                count = int(row.get("stats", {}).get("count", 0))
+
+                if group_name not in groups_map:
+                    groups_map[group_name] = {}
+                groups_map[group_name][state_label] = groups_map[group_name].get(state_label, 0) + count
+
+    except Exception as e:
+        print(f"⚠️ Error fetching SNOW assignment groups: {e}")
+
+    # Build sorted list: total tickets desc
+    result = []
+    for group_name, states in groups_map.items():
+        total = sum(states.values())
+        result.append({"group": group_name, "total": total, "states": states})
+    result.sort(key=lambda x: x["total"], reverse=True)
+    return result
+
+def get_token_usage():
+    """Returns the aggregated token usage metrics from the database."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    # Total overall tokens
+    c.execute("SELECT SUM(prompt_tokens), SUM(completion_tokens), SUM(total_tokens) FROM chat_logs")
+    overall = c.fetchone()
+    
+    # Today's tokens
+    now_dt = datetime.utcnow()
+    today_start = now_dt.strftime('%Y-%m-%d') + 'T00:00:00Z'
+    c.execute("SELECT SUM(total_tokens) FROM chat_logs WHERE timestamp >= ?", (today_start,))
+    today_total = c.fetchone()[0] or 0
+
+    # 🚀 ROLLING 60S WINDOW (TPM / RPM)
+    minute_ago = (now_dt - timedelta(seconds=60)).isoformat() + 'Z'
+    
+    # TPM: Sum of total_tokens for both 'bot' and 'bot_internal' roles
+    c.execute("""
+        SELECT SUM(total_tokens), COUNT(*) 
+        FROM chat_logs 
+        WHERE timestamp >= ? AND role IN ('bot', 'bot_internal')
+    """, (minute_ago,))
+    rolling = c.fetchone()
+    tpm = rolling[0] or 0
+    rpm = rolling[1] or 0
+
+    conn.close()
+
+    overall_pt = overall[0] or 0
+    overall_ct = overall[1] or 0
+    overall_tt = overall[2] or 0
+
+    return {
+        "overall": {
+            "prompt": overall_pt,
+            "completion": overall_ct,
+            "total": overall_tt
+        },
+        "today": today_total,
+        "rolling": {
+            "tpm": tpm,
+            "rpm": rpm
+        }
+    }

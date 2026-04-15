@@ -212,13 +212,13 @@ function getSessionStatus(session) {
 // ─── THEMED PANEL WRAPPER ───────────────────────────────────────────────────────
 function Panel({ children, sx = {} }) {
   return (
-    <Box sx={{ 
-      bgcolor: 'background.paper', 
-      border: '1px solid', 
-      borderColor: 'divider', 
-      borderRadius: 1.5, 
-      overflow: 'hidden', 
-      ...sx 
+    <Box sx={{
+      bgcolor: 'background.paper',
+      border: '1px solid',
+      borderColor: 'divider',
+      borderRadius: 1.5,
+      overflow: 'hidden',
+      ...sx
     }}>
       {children}
     </Box>
@@ -226,9 +226,12 @@ function Panel({ children, sx = {} }) {
 }
 
 // ─── KPI CARD ─────────────────────────────────────────────────────────────────
-function KpiCard({ label, value, trend, trendPositive = null, loading }) {
+function KpiCard({ label, value, trend, trendPositive = null, loading, icon }) {
   return (
     <Panel sx={{ p: 2.5, height: '100%', overflow: 'visible' }}>
+      {icon && (
+        <Typography sx={{ fontSize: '1.4rem', mb: 0.5, lineHeight: 1 }}>{icon}</Typography>
+      )}
       <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'text.secondary', letterSpacing: '0.09em', textTransform: 'uppercase', mb: 1.5 }}>
         {label}
       </Typography>
@@ -242,7 +245,7 @@ function KpiCard({ label, value, trend, trendPositive = null, loading }) {
           <Typography sx={{ fontSize: '2.6rem', fontWeight: 800, color: 'text.primary', lineHeight: 1.05, mb: 0.8 }}>
             {value}
           </Typography>
-          <Typography sx={{ fontSize: '0.8rem', color: trendPositive === false ? 'error.main' : 'success.main' }}>
+          <Typography sx={{ fontSize: '0.8rem', color: trendPositive === false ? 'error.main' : trendPositive === true ? 'success.main' : 'text.secondary' }}>
             {trend}
           </Typography>
         </>
@@ -289,7 +292,7 @@ function StatusDot({ status }) {
 // ─── DONUT CHART ───────────────────────────────────────────────────────
 function DonutChartDark({ data, loading }) {
   const theme = useTheme();
-  
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
@@ -344,7 +347,7 @@ function DonutChartDark({ data, loading }) {
 
 // ─── WEEKLY BAR CHART (LIVE) ──────────────────────────────────────────────────
 function WeeklyBarChart() {
-  const [data,    setData]    = useState([]);
+  const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const theme = useTheme();
 
@@ -367,16 +370,16 @@ function WeeklyBarChart() {
     return () => clearInterval(id);
   }, [fetchData]);
 
-  const CH    = 120;
+  const CH = 120;
   const BAR_W = 28;
-  const GAP   = 14;
+  const GAP = 14;
   const PAD_L = 30;
   const PAD_B = 26;
-  const W     = PAD_L + GAP + (BAR_W + GAP) * 7;
+  const W = PAD_L + GAP + (BAR_W + GAP) * 7;
 
   // Auto-scale: pick the next clean ceiling above the real max
   const rawMax = data.length ? Math.max(...data.map(d => d.count), 1) : 10;
-  const MAX    = Math.ceil(rawMax / 5) * 5 || 5;
+  const MAX = Math.ceil(rawMax / 5) * 5 || 5;
   const gridLines = Array.from({ length: 4 }, (_, i) => Math.round((MAX / 3) * i));
 
   return (
@@ -514,64 +517,70 @@ function OverviewTab({ stats, statsLoading, sessions, sessionsLoading }) {
   const today = stats?.tickets_today ?? 0;
   const users = stats?.unique_users ?? 0;
 
-  // Calculate live Avg Resolution Time based on actual session data
-  let totalMin = 0;
-  let resCount = 0;
-  let priorTotalMin = 0;
-  let priorCount = 0;
-
-  const now = Date.now();
-  const oneWeekAgo = now - 7 * 24 * 3600 * 1000;
+  // Calculate live Avg Resolution Time based on EXACT ticket lifecycle (Created -> Updated)
+  const ticketsData = {}; // { 'INC001123': { created: timestamp, resolved: timestamp } }
 
   if (sessions && Array.isArray(sessions)) {
     sessions.forEach(s => {
       const msgs = s.messages || [];
-      if (msgs.length > 1) {
-        const last = msgs[msgs.length - 1];
-        if (last.role === 'bot') {
-          // Find the start of the *current* conversation block
-          let sessionStartMsg = last;
-          let sessionIncludesTool = false;
-          
-          for (let i = msgs.length - 2; i >= 0; i--) {
-            const m = msgs[i];
-            const diffMs = new Date(sessionStartMsg.timestamp).getTime() - new Date(m.timestamp).getTime();
-            if (diffMs > 3600 * 1000) break; // 1 hour break = start of a new issue session
-            sessionStartMsg = m;
-            if (m.role === 'tool') sessionIncludesTool = true;
+      msgs.forEach(m => {
+        if (m.role === 'tool') {
+          if (m.tool_name === 'create_ticket' && m.message && m.message.startsWith('Created INC')) {
+            const inc = m.message.replace('Created ', '').trim();
+            if (!ticketsData[inc]) {
+              ticketsData[inc] = { created: new Date(m.timestamp).getTime(), resolved: null };
+            }
           }
-          
-          if (sessionStartMsg !== last && sessionIncludesTool) {
-            const startT = new Date(sessionStartMsg.timestamp).getTime();
-            const endT = new Date(last.timestamp).getTime();
-            const diffMin = (endT - startT) / 60000;
-            
-            if (diffMin >= 0) {
-              totalMin += diffMin;
-              resCount += 1;
-              if (endT < oneWeekAgo) {
-                priorTotalMin += diffMin;
-                priorCount += 1;
+          if (m.tool_name === 'update_ticket' && m.message && m.message.startsWith('Updated INC')) {
+            const incMatch = m.message.match(/Updated (INC\d+)/);
+            if (incMatch) {
+              const inc = incMatch[1];
+              if (ticketsData[inc]) {
+                // Treat the most recent update as the "resolution" or "closed" point
+                ticketsData[inc].resolved = new Date(m.timestamp).getTime();
               }
             }
           }
         }
-      }
+      });
     });
   }
 
+  let totalMin = 0;
+  let resCount = 0;
+  let priorTotalMin = 0;
+  let priorCount = 0;
+  let pendingCount = 0;
+
+  const now = Date.now();
+  const oneWeekAgo = now - 7 * 24 * 3600 * 1000;
+
+  Object.values(ticketsData).forEach(t => {
+    if (t.created && t.resolved && t.resolved >= t.created) {
+      const diffMin = (t.resolved - t.created) / 60000;
+      totalMin += diffMin;
+      resCount += 1;
+      if (t.resolved < oneWeekAgo) {
+        priorTotalMin += diffMin;
+        priorCount += 1;
+      }
+    } else if (t.created && !t.resolved) {
+      pendingCount += 1;
+    }
+  });
+
   const currentAvg = resCount > 0 ? (totalMin / resCount) : 0;
   const priorAvg = priorCount > 0 ? (priorTotalMin / priorCount) : currentAvg;
-  
+
   const rawDiff = currentAvg - priorAvg;
   const trendVal = Math.abs(rawDiff) < 0.1 ? 0 : rawDiff;
-  const trendStr = trendVal === 0 
+  const trendStr = trendVal === 0
     ? (resCount > 0 ? 'Stable vs last week' : 'No data yet')
     : `${trendVal > 0 ? '+' : ''}${trendVal.toFixed(1)} min vs last week`;
 
   let displayNum = "0";
   let displayUnit = "min";
-  
+
   if (resCount > 0) {
     if (currentAvg > 0 && currentAvg < 1) {
       displayNum = Math.max(1, Math.round(currentAvg * 60)).toString();
@@ -583,44 +592,73 @@ function OverviewTab({ stats, statsLoading, sessions, sessionsLoading }) {
   }
 
   return (
-    <Box>
-      {/* KPI Row */}
-      <Grid container spacing={2} sx={{ mb: 2.5 }}>
+    <Box sx={{ width: '100%', flexGrow: 1 }}>
+      {/* KPI Row — 6 cards: 4 live SNOW states + Unique Users + Avg Resolution Time */}
+      <Box sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)', lg: 'repeat(6, 1fr)' },
+        gap: 2,
+        mb: 2.5,
+        width: '100%',
+      }}>
         {[
           {
-            label: 'Tickets Automated',
-            value: tickets,
-            trend: `+${today} today`,
+            label: 'New',
+            value: stats?.snow?.new ?? 0,
+            trend: 'Open & unassigned',
+            trendPositive: null,
           },
           {
-            label: 'Unique Users Assisted',
+            label: 'In Progress',
+            value: stats?.snow?.in_progress ?? 0,
+            trend: 'Actively being worked',
+            trendPositive: true,
+          },
+          {
+            label: 'On Hold',
+            value: stats?.snow?.on_hold ?? 0,
+            trend: 'Awaiting action',
+            trendPositive: null,
+          },
+          {
+            label: 'Resolved',
+            value: stats?.snow?.resolved ?? 0,
+            trend: 'Closed + Resolved',
+            trendPositive: true,
+          },
+          {
+            label: 'Unique Users',
             value: users,
-            trend: users > 0 ? `+${Math.max(1, Math.round(users * 0.07))} today` : '0 today',
+            trend: users > 0 ? `${users} assisted` : 'No users yet',
+            trendPositive: true,
           },
           {
             label: 'Avg Resolution Time',
             value: <>{displayNum}<span style={{ fontSize: '1.3rem', fontWeight: 400, marginLeft: 2 }}>{displayUnit}</span></>,
             trend: trendStr,
+            trendPositive: null,
           },
         ].map((k, i) => (
-          <Grid key={i} item xs={12} sm={6} md={4}>
-            <KpiCard {...k} loading={statsLoading} />
-          </Grid>
+          <KpiCard key={i} {...k} loading={statsLoading} />
         ))}
-      </Grid>
+      </Box>
 
-      {/* Charts Row */}
-      <Grid container spacing={2} sx={{ mb: 2.5 }}>
-        <Grid item xs={12} md={5}>
-          <Panel sx={{ p: 2.5, height: '100%' }}>
-            <Typography sx={{ fontSize: '0.875rem', color: '#A1A1AA', mb: 2 }}>Tool usage breakdown</Typography>
-            <DonutChartDark data={stats?.tool_usage} loading={statsLoading} />
-          </Panel>
-        </Grid>
-        <Grid item xs={12} md={7}>
+      {/* Charts Row (CSS Grid) */}
+      <Box sx={{ 
+        display: 'grid', 
+        gridTemplateColumns: { xs: '1fr', md: '5fr 7fr' }, 
+        gap: 2, 
+        mb: 2.5, 
+        width: '100%' 
+      }}>
+        <Panel sx={{ p: 2.5, height: '100%' }}>
+          <Typography sx={{ fontSize: '0.875rem', color: '#A1A1AA', mb: 2 }}>Tool usage breakdown</Typography>
+          <DonutChartDark data={stats?.tool_usage} loading={statsLoading} />
+        </Panel>
+        <Box>
           <WeeklyBarChart />
-        </Grid>
-      </Grid>
+        </Box>
+      </Box>
 
       {/* Recent Sessions */}
       <RecentSessionsTable sessions={sessions} loading={sessionsLoading} />
@@ -1287,7 +1325,6 @@ function App() {
             </Typography>
             <Box sx={{ flex: 1 }} />
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-              <Typography sx={{ fontSize: '0.77rem', color: 'text.secondary' }}>{refreshLabel}</Typography>
               <Tooltip title={`Switch to ${themeMode === 'dark' ? 'Light' : 'Dark'} Mode`}>
                 <IconButton size="small" onClick={() => setThemeMode(m => m === 'dark' ? 'light' : 'dark')} sx={{ color: 'text.secondary' }}>
                   {themeMode === 'dark' ? <LightModeIcon sx={{ fontSize: 16 }} /> : <DarkModeIcon sx={{ fontSize: 16 }} />}
@@ -1309,12 +1346,14 @@ function App() {
           >
             <Tab label="Overview & Analytics" value={0} />
             <Tab label="Live Chat Sessions" value={1} />
-            <Tab label="MCP Server Controls" value={2} />
+            <Tab label="Assignment Groups" value={2} />
+            <Tab label="Azure Resource Quotas" value={3} />
+            <Tab label="MCP Server Controls" value={4} />
           </Tabs>
         </Box>
 
         {/* ── Page content ────────────────────────────────────────── */}
-        <Box sx={{ flex: 1, p: { xs: 2, md: 3 } }}>
+        <Box sx={{ flex: 1, p: { xs: 2, md: 3 }, width: '100%', overflowX: 'hidden' }}>
           {activeTab === 0 && (
             <OverviewTab
               stats={stats} statsLoading={statsLoading}
@@ -1328,6 +1367,12 @@ function App() {
             />
           )}
           {activeTab === 2 && (
+            <AssignmentGroupsTab />
+          )}
+          {activeTab === 3 && (
+            <AzureQuotaTab />
+          )}
+          {activeTab === 4 && (
             <McpControlsTab
               config={config} onToggle={toggleServer}
               configLoading={configLoading}
@@ -1336,6 +1381,349 @@ function App() {
         </Box>
       </Box>
     </ThemeProvider>
+  );
+}
+// ─── ASSIGNMENT GROUPS TAB ────────────────────────────────────────────────────
+function AssignmentGroupsTab() {
+  const [groups, setGroups] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [lastFetch, setLastFetch] = useState(null);
+  const [expanded, setExpanded] = useState({});
+  const theme = useTheme();
+
+  const fetchGroups = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/assignment-groups');
+      const data = await res.json();
+      setGroups(Array.isArray(data) ? data : []);
+      setLastFetch(new Date());
+    } catch (e) {
+      console.error('Failed to load assignment groups:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchGroups();
+    const id = setInterval(fetchGroups, 30000);
+    return () => clearInterval(id);
+  }, [fetchGroups]);
+
+  const toggleRow = (group) => setExpanded(prev => ({ ...prev, [group]: !prev[group] }));
+
+  const grandTotal = groups.reduce((s, g) => s + g.total, 0);
+
+  const STATE_COLOR = {
+    'New':         '#6264A7',
+    'In Progress': '#3B82F6',
+    'On Hold':     '#F59E0B',
+    'Resolved':    '#22C55E',
+    'Closed':      '#71717A',
+    'Canceled':    '#EF4444',
+  };
+
+  const STATE_ORDER = ['New', 'In Progress', 'On Hold', 'Resolved', 'Closed', 'Canceled'];
+
+  return (
+    <Box sx={{ width: '100%' }}>
+      {/* Page Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+        <Box>
+          <Typography sx={{ fontWeight: 700, fontSize: '1rem', color: 'text.primary' }}>
+            Assignment Group Breakdown
+          </Typography>
+          <Typography sx={{ fontSize: '0.78rem', color: 'text.secondary', mt: 0.3 }}>
+            Live from ServiceNow · {grandTotal} total tickets across {groups.length} groups
+            {lastFetch && ` · updated ${Math.floor((Date.now() - lastFetch) / 1000)}s ago`}
+          </Typography>
+        </Box>
+        <Tooltip title="Refresh">
+          <IconButton size="small" onClick={fetchGroups} sx={{ color: 'text.secondary' }}>
+            <RefreshIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {/* Column headers */}
+      {!loading && groups.length > 0 && (
+        <Box sx={{
+          display: 'grid',
+          gridTemplateColumns: '1fr auto',
+          px: 2.5,
+          py: 0.8,
+          mb: 0.5,
+          borderRadius: 1,
+        }}>
+          <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: 'text.disabled', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Assignment Group
+          </Typography>
+          <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: 'text.disabled', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Total
+          </Typography>
+        </Box>
+      )}
+
+      {/* Accordion Rows */}
+      {loading ? (
+        <Panel>
+          {[1,2,3,4,5].map(i => (
+            <Box key={i} sx={{ px: 2.5, py: 1.8, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', gap: 2, alignItems: 'center' }}>
+              <Skeleton width="40%" height={18} sx={{ bgcolor: 'divider' }} />
+              <Skeleton width="20%" height={18} sx={{ bgcolor: 'divider', ml: 'auto' }} />
+            </Box>
+          ))}
+        </Panel>
+      ) : groups.length === 0 ? (
+        <Panel sx={{ p: 5, textAlign: 'center' }}>
+          <Typography sx={{ color: 'text.disabled' }}>No assignment group data found.</Typography>
+        </Panel>
+      ) : (
+        <Panel>
+          {groups.map((g, idx) => {
+            const isOpen = !!expanded[g.group];
+            const pct = grandTotal > 0 ? (g.total / grandTotal) * 100 : 0;
+            const groupColor = ['#6264A7','#3B82F6','#22C55E','#F59E0B','#EF4444','#8B5CF6','#EC4899','#14B8A6'][idx % 8];
+            const orderedStates = STATE_ORDER.filter(s => g.states[s]);
+            const otherStates = Object.keys(g.states).filter(s => !STATE_ORDER.includes(s));
+
+            return (
+              <Box key={g.group} sx={{ borderBottom: idx < groups.length - 1 ? '1px solid' : 'none', borderColor: 'divider' }}>
+                {/* Row header — clickable */}
+                <Box
+                  onClick={() => toggleRow(g.group)}
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: '24px 1fr auto',
+                    alignItems: 'center',
+                    gap: 2,
+                    px: 3, py: isOpen ? 2.5 : 2,
+                    cursor: 'pointer',
+                    bgcolor: isOpen ? 'background.level2' : 'transparent',
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    '&:hover': { bgcolor: isOpen ? 'background.level2' : 'action.hover' },
+                  }}
+                >
+                  {/* Expand arrow */}
+                  <Typography sx={{ fontSize: '0.8rem', color: isOpen ? 'primary.main' : 'text.secondary', userSelect: 'none', transition: 'transform 0.3s ease', transform: isOpen ? 'rotate(90deg)' : 'none' }}>
+                    ▶
+                  </Typography>
+
+                  {/* Group info */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Box sx={{ width: 14, height: 14, borderRadius: '50%', bgcolor: groupColor, flexShrink: 0, boxShadow: `0 0 10px ${groupColor}66` }} />
+                    <Typography sx={{ fontSize: '1.2rem', fontWeight: 700, color: isOpen ? 'text.primary' : 'text.secondary', transition: 'color 0.2s' }}>
+                      {g.group}
+                    </Typography>
+                  </Box>
+
+                  {/* Total count */}
+                  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5 }}>
+                    <Typography sx={{ fontSize: '1.8rem', fontWeight: 800, color: isOpen ? 'text.primary' : 'text.secondary', textAlign: 'right', transition: 'color 0.2s' }}>
+                      {g.total}
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: 'text.disabled', textTransform: 'uppercase' }}>
+                      Tickets
+                    </Typography>
+                  </Box>
+                </Box>
+
+                {/* Expanded state breakdown */}
+                {isOpen && (
+                  <Box sx={{ px: 4, pb: 3.5, pt: 1.5, bgcolor: 'background.level2', borderTop: '1px dashed', borderColor: 'divider' }}>
+                    <Box sx={{
+                      display: 'grid',
+                      gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', lg: 'repeat(6, 1fr)' },
+                      gap: 2,
+                      mt: 1,
+                    }}>
+                      {[...orderedStates, ...otherStates].map(state => {
+                        const c = STATE_COLOR[state] || '#71717A';
+                        const cnt = g.states[state];
+                        return (
+                          <Box key={state} sx={{ 
+                            bgcolor: 'background.paper', 
+                            border: '1px solid', 
+                            borderColor: 'divider', 
+                            borderRadius: 2, 
+                            p: 2,
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
+                            borderTop: `3px solid ${c}`
+                          }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 1.5 }}>
+                              <Box sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: c, flexShrink: 0 }} />
+                              <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                                {state}
+                              </Typography>
+                            </Box>
+                            <Typography sx={{ fontSize: '2.2rem', fontWeight: 800, color: 'text.primary', lineHeight: 1 }}>
+                              {cnt}
+                            </Typography>
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  </Box>
+                )}
+              </Box>
+            );
+          })}
+        </Panel>
+      )}
+    </Box>
+  );
+}
+// ─── AZURE QUOTA TAB ────────────────────────────────────────────────────────
+function AzureQuotaTab() {
+  const [quotas, setQuotas] = useState([]);
+  const [tokens, setTokens] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [quotaRes, tokenRes] = await Promise.all([
+        fetch('/api/admin/azure-quota'),
+        fetch('/api/admin/token-usage')
+      ]);
+      const quotaData = await quotaRes.json();
+      const tokenData = await tokenRes.json();
+      setQuotas(Array.isArray(quotaData) ? quotaData : []);
+      setTokens(tokenData);
+    } catch (e) {
+      console.error('Failed to fetch azure metrics:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+    const id = setInterval(fetchData, 15000); // Poll every 15s for real-time feel
+    return () => clearInterval(id);
+  }, [fetchData]);
+
+  return (
+    <Box sx={{ width: '100%' }}>
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+        <Box>
+          <Typography sx={{ fontWeight: 700, fontSize: '1.2rem', color: 'text.primary' }}>
+            AI Infrastructure & Quota Limits
+          </Typography>
+          <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary', mt: 0.3 }}>
+            Monitor real-time token consumption and operational health boundaries.
+          </Typography>
+        </Box>
+        <Button variant="outlined" startIcon={<RefreshIcon />} onClick={fetchData} disabled={loading} size="small" sx={{ borderColor: 'divider', color: 'text.primary' }}>
+          Refresh Stats
+        </Button>
+      </Box>
+
+      {/* TOKEN SECTION */}
+      <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: 'primary.main', mb: 2, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+        Live Token Monitoring (GPT-4o)
+      </Typography>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' }, gap: 3, mb: 5 }}>
+        {loading && !tokens ? (
+          [1, 2, 3, 4].map(i => <Panel key={i} sx={{ p: 3, height: 120 }}><Skeleton height={80} /></Panel>)
+        ) : (
+          <>
+            <Panel sx={{ p: 3, borderTop: '4px solid', borderTopColor: 'primary.main' }}>
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: 'text.secondary', mb: 1.5, textTransform: 'uppercase' }}>Rolling 60s TPM</Typography>
+              <Typography sx={{ fontSize: '2.4rem', fontWeight: 800, color: 'text.primary', lineHeight: 1 }}>
+                {(tokens?.rolling?.tpm || 0).toLocaleString()} <span style={{ fontSize: '0.8rem', color: 'text.disabled' }}>TPM</span>
+              </Typography>
+            </Panel>
+            <Panel sx={{ p: 3, borderTop: '4px solid', borderTopColor: 'info.main' }}>
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: 'text.secondary', mb: 1.5, textTransform: 'uppercase' }}>Rolling 60s RPM</Typography>
+              <Typography sx={{ fontSize: '2.4rem', fontWeight: 800, color: 'text.primary', lineHeight: 1 }}>
+                {(tokens?.rolling?.rpm || 0).toLocaleString()} <span style={{ fontSize: '0.8rem', color: 'text.disabled' }}>RPM</span>
+              </Typography>
+            </Panel>
+            <Panel sx={{ p: 3, borderTop: '4px solid', borderTopColor: 'success.main' }}>
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: 'text.secondary', mb: 1.5, textTransform: 'uppercase' }}>Completion (Output)</Typography>
+              <Typography sx={{ fontSize: '2.4rem', fontWeight: 800, color: 'text.primary', lineHeight: 1 }}>
+                {(tokens?.overall?.completion || 0).toLocaleString()} <span style={{ fontSize: '0.8rem', color: 'text.disabled' }}>Tokens</span>
+              </Typography>
+            </Panel>
+            <Panel sx={{ p: 3, borderTop: '4px solid', borderTopColor: 'warning.main', bgcolor: 'background.level2' }}>
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: 'primary.main', mb: 1.5, textTransform: 'uppercase' }}>Tot. Consumption</Typography>
+              <Typography sx={{ fontSize: '2.4rem', fontWeight: 800, color: 'text.primary', lineHeight: 1 }}>
+                {(tokens?.overall?.total || 0).toLocaleString()} <span style={{ fontSize: '0.8rem', color: 'text.disabled' }}>Tokens</span>
+              </Typography>
+            </Panel>
+          </>
+        )}
+      </Box>
+
+      <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: 'text.secondary', mb: 2, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+        API & Deployment Rate Limits
+      </Typography>
+      {/* QUOTA GRID */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' }, gap: 3 }}>
+        {loading && quotas.length === 0 ? (
+          [1, 2, 3, 4].map(i => (
+            <Panel key={i} sx={{ p: 3 }}>
+              <Skeleton width="40%" height={24} sx={{ mb: 2, bgcolor: 'divider' }} />
+              <Skeleton width="100%" height={16} sx={{ mb: 1, bgcolor: 'divider' }} />
+              <Skeleton width="100%" height={8} sx={{ bgcolor: 'divider' }} />
+            </Panel>
+          ))
+        ) : quotas.length === 0 ? (
+          <Typography color="error">No quota data available. Please check backend connection.</Typography>
+        ) : (
+          quotas.map((q, idx) => {
+            const pct = Math.min(100, (q.used / q.limit) * 100);
+            let barColor = '#22C55E';
+            if (pct > 75) barColor = '#F59E0B';
+            if (pct > 90) barColor = '#EF4444';
+
+            return (
+              <Panel key={idx} sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <Typography sx={{ fontWeight: 700, fontSize: '1.05rem', color: 'text.primary' }}>
+                    {q.service}
+                  </Typography>
+                  <Typography sx={{
+                    px: 1, py: 0.3,
+                    bgcolor: pct > 90 ? 'error.main' : pct > 75 ? 'warning.main' : 'success.main',
+                    color: '#fff',
+                    fontSize: '0.65rem',
+                    fontWeight: 700,
+                    borderRadius: 1,
+                    textTransform: 'uppercase'
+                  }}>
+                    {pct > 90 ? 'Critical' : pct > 75 ? 'Warning' : 'Healthy'}
+                  </Typography>
+                </Box>
+                
+                <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary', fontWeight: 600 }}>
+                  {q.metric}
+                </Typography>
+
+                <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1, mt: 1.5, mb: 0.5 }}>
+                  <Typography sx={{ fontSize: '2rem', fontWeight: 800, lineHeight: 1, color: 'text.primary' }}>
+                    {q.used.toLocaleString()}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.9rem', color: 'text.secondary', pb: 0.3 }}>
+                    / {q.limit.toLocaleString()} {q.unit}
+                  </Typography>
+                </Box>
+
+                <Box sx={{ width: '100%', height: 8, bgcolor: 'divider', borderRadius: 4, overflow: 'hidden' }}>
+                  <Box sx={{ width: `${pct}%`, height: '100%', bgcolor: barColor, transition: 'width 1s ease-out' }} />
+                </Box>
+                <Typography sx={{ textAlign: 'right', fontSize: '0.7rem', color: 'text.disabled', mt: 0.5 }}>
+                  {pct.toFixed(2)}% of {q.unit} quota
+                </Typography>
+              </Panel>
+            );
+          })
+        )}
+      </Box>
+    </Box>
   );
 }
 

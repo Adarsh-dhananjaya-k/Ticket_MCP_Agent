@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 # Import the bot logic and DB
 from agent.teams_bot import ITSMBot
-from agent.db import init_db, get_recent_logs, get_stats, get_sessions, get_weekly_tickets
+from agent.db import init_db, get_recent_logs, get_stats, get_sessions, get_weekly_tickets, get_snow_stats, get_snow_assignment_groups, get_token_usage
 from agent.blob_storage import EntraIdBlobStorage
 
 load_dotenv()
@@ -168,7 +168,9 @@ async def api_update_config(req: web.Request) -> web.Response:
 async def api_get_stats(req: web.Request) -> web.Response:
     """KPI statistics for the Overview tab (tickets, users, tool usage)."""
     try:
-        return web.json_response(get_stats())
+        data = get_stats()
+        data["snow"] = get_snow_stats()
+        return web.json_response(data)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
@@ -183,6 +185,76 @@ async def api_get_weekly_tickets(req: web.Request) -> web.Response:
     """Per-day ticket counts for the last 7 days (bar chart)."""
     try:
         return web.json_response(get_weekly_tickets())
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+async def api_get_assignment_groups(req: web.Request) -> web.Response:
+    """Live incident counts grouped by assignment_group from ServiceNow."""
+    try:
+        return web.json_response(get_snow_assignment_groups())
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+async def api_get_azure_quota(req: web.Request) -> web.Response:
+    """Returns actual service quotas from configured Azure resources."""
+    import os, requests
+    from aiohttp import web
+    
+    quota_data = []
+
+    # 1. Removed Azure AI Search per user request
+
+    # 2. Real Data: Azure OpenAI Quota via rate-limit headers
+    openai_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+    openai_key = os.getenv('AZURE_OPENAI_KEY')
+    deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4o')
+    api_version = os.getenv('AZURE_OPENAI_API_VERSION', '2024-08-01-preview')
+
+    if openai_endpoint and openai_key:
+        try:
+            # 1. Fetch live limits from the actual Azure OpenAI rate-limit headers
+            url = f"{openai_endpoint.rstrip('/')}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+            res = requests.post(
+                url, 
+                headers={'api-key': openai_key, 'Content-Type': 'application/json'},
+                json={'messages': [{'role': 'user', 'content': 'health_check'}], 'max_tokens': 1},
+                timeout=5
+            )
+            
+            # 2. Fetch our calculated real-time usage from the DB rolling window
+            logs_stats = get_token_usage()
+            rolling_tpm = logs_stats["rolling"]["tpm"]
+            rolling_rpm = logs_stats["rolling"]["rpm"]
+
+            if res.status_code == 200:
+                # Get the dynamic limits from Azure
+                limit_tokens = int(res.headers.get("x-ratelimit-limit-tokens", 0))
+                limit_req = int(res.headers.get("x-ratelimit-limit-requests", 0))
+
+                quota_data.append({
+                    "service": f"Azure OpenAI ({deployment})",
+                    "metric": "Live Rate Limit (TPM)",
+                    "used": rolling_tpm,
+                    "limit": limit_tokens,
+                    "unit": "TPM"
+                })
+
+                quota_data.append({
+                    "service": f"Azure OpenAI ({deployment})",
+                    "metric": "Live Rate Limit (RPM)",
+                    "used": rolling_rpm,
+                    "limit": limit_req,
+                    "unit": "RPM"
+                })
+        except Exception as e:
+            print("Failed to fetch Live Azure OpenAI quotas:", e)
+
+    return web.json_response(quota_data)
+
+async def api_get_token_usage(req: web.Request) -> web.Response:
+    """Returns aggregated token consumption metrics."""
+    try:
+        return web.json_response(get_token_usage())
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
@@ -212,6 +284,9 @@ app.router.add_post("/api/admin/config",  api_update_config)
 app.router.add_get("/api/admin/stats",          api_get_stats)
 app.router.add_get("/api/admin/sessions",       api_get_sessions)
 app.router.add_get("/api/admin/weekly-tickets", api_get_weekly_tickets)
+app.router.add_get("/api/admin/assignment-groups", api_get_assignment_groups)
+app.router.add_get("/api/admin/azure-quota", api_get_azure_quota)
+app.router.add_get("/api/admin/token-usage", api_get_token_usage)
 
 # =========================================================
 

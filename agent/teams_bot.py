@@ -226,14 +226,23 @@ Use this exact email when tools require a 'caller_email' or 'action_by_email'.
                     msg = response.choices[0].message
                     history.append(msg)
                     
+                    # 🚀 PHASE 6: Extract live token usage
+                    usage = response.usage
+                    pt = usage.prompt_tokens if usage else 0
+                    ct = usage.completion_tokens if usage else 0
+                    tt = usage.total_tokens if usage else 0
+                    
                     # CASE A: AI replies directly to the user
                     if not msg.tool_calls:
-                        # 🟢 PHASE 5: Log the bot's final reply
-                        log_interaction(user_email, "bot", msg.content)
+                        # 🟢 Log the bot's final reply
+                        log_interaction(user_email, "bot", msg.content, prompt_tokens=pt, completion_tokens=ct, total_tokens=tt)
                         await turn_context.send_activity(MessageFactory.text(msg.content))
                         break
                     
                     # CASE B: AI requests tool execution
+                    # Log the internal "thinking" step tokens so TPM/RPM is accurate
+                    log_interaction(user_email, "bot_internal", f"Thinking: requested {len(msg.tool_calls)} tools", prompt_tokens=pt, completion_tokens=ct, total_tokens=tt)
+                    
                     for tool in msg.tool_calls:
                         tool_name = tool.function.name
                         args = json.loads(tool.function.arguments)
