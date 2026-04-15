@@ -11,7 +11,6 @@ openpyxl
 botbuilder-core
 botbuilder-schema
 botbuilder-integration-aiohttp
-botbuilder-integration-teams
 aiohttp
 azure-storage-blob
 azure-keyvault-secrets
