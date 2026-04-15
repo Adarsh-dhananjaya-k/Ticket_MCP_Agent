@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 # Import the bot logic and DB
 from agent.teams_bot import ITSMBot
-from agent.db import init_db, get_recent_logs
+from agent.db import init_db, get_recent_logs, get_stats, get_sessions
 from agent.blob_storage import EntraIdBlobStorage
 
 load_dotenv()
@@ -165,6 +165,20 @@ async def api_update_config(req: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
+async def api_get_stats(req: web.Request) -> web.Response:
+    """KPI statistics for the Overview tab (tickets, users, tool usage)."""
+    try:
+        return web.json_response(get_stats())
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+async def api_get_sessions(req: web.Request) -> web.Response:
+    """Chat logs grouped by user for the Live Sessions tab."""
+    try:
+        return web.json_response(get_sessions())
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
 # =========================================================
 # --- APP INIT
 # =========================================================
@@ -185,9 +199,11 @@ else:
     print(f"⚠️ WARNING: React assets folder not found at {assets_path}. Did you run 'npm run build'?")
 
 # --- BACKEND API ROUTES ---
-app.router.add_get("/api/admin/logs", api_get_logs)
-app.router.add_get("/api/admin/config", api_get_config)
-app.router.add_post("/api/admin/config", api_update_config)
+app.router.add_get("/api/admin/logs",     api_get_logs)
+app.router.add_get("/api/admin/config",   api_get_config)
+app.router.add_post("/api/admin/config",  api_update_config)
+app.router.add_get("/api/admin/stats",    api_get_stats)
+app.router.add_get("/api/admin/sessions", api_get_sessions)
 
 # =========================================================
 
