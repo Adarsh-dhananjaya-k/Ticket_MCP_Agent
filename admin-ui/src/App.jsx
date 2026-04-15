@@ -513,6 +513,74 @@ function OverviewTab({ stats, statsLoading, sessions, sessionsLoading }) {
   const today = stats?.tickets_today ?? 0;
   const users = stats?.unique_users ?? 0;
 
+  // Calculate live Avg Resolution Time based on actual session data
+  let totalMin = 0;
+  let resCount = 0;
+  let priorTotalMin = 0;
+  let priorCount = 0;
+
+  const now = Date.now();
+  const oneWeekAgo = now - 7 * 24 * 3600 * 1000;
+
+  if (sessions && Array.isArray(sessions)) {
+    sessions.forEach(s => {
+      const msgs = s.messages || [];
+      if (msgs.length > 1) {
+        const last = msgs[msgs.length - 1];
+        if (last.role === 'bot') {
+          // Find the start of the *current* conversation block
+          let sessionStartMsg = last;
+          let sessionIncludesTool = false;
+          
+          for (let i = msgs.length - 2; i >= 0; i--) {
+            const m = msgs[i];
+            const diffMs = new Date(sessionStartMsg.timestamp).getTime() - new Date(m.timestamp).getTime();
+            if (diffMs > 3600 * 1000) break; // 1 hour break = start of a new issue session
+            sessionStartMsg = m;
+            if (m.role === 'tool') sessionIncludesTool = true;
+          }
+          
+          if (sessionStartMsg !== last && sessionIncludesTool) {
+            const startT = new Date(sessionStartMsg.timestamp).getTime();
+            const endT = new Date(last.timestamp).getTime();
+            const diffMin = (endT - startT) / 60000;
+            
+            if (diffMin >= 0) {
+              totalMin += diffMin;
+              resCount += 1;
+              if (endT < oneWeekAgo) {
+                priorTotalMin += diffMin;
+                priorCount += 1;
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  const currentAvg = resCount > 0 ? (totalMin / resCount) : 0;
+  const priorAvg = priorCount > 0 ? (priorTotalMin / priorCount) : currentAvg;
+  
+  const rawDiff = currentAvg - priorAvg;
+  const trendVal = Math.abs(rawDiff) < 0.1 ? 0 : rawDiff;
+  const trendStr = trendVal === 0 
+    ? (resCount > 0 ? 'Stable vs last week' : 'No data yet')
+    : `${trendVal > 0 ? '+' : ''}${trendVal.toFixed(1)} min vs last week`;
+
+  let displayNum = "0";
+  let displayUnit = "min";
+  
+  if (resCount > 0) {
+    if (currentAvg > 0 && currentAvg < 1) {
+      displayNum = Math.max(1, Math.round(currentAvg * 60)).toString();
+      displayUnit = "sec";
+    } else {
+      displayNum = currentAvg.toFixed(1);
+      displayUnit = "min";
+    }
+  }
+
   return (
     <Box>
       {/* KPI Row */}
@@ -530,8 +598,8 @@ function OverviewTab({ stats, statsLoading, sessions, sessionsLoading }) {
           },
           {
             label: 'Avg Resolution Time',
-            value: <>3.2<span style={{ fontSize: '1.3rem', fontWeight: 400, marginLeft: 2 }}>min</span></>,
-            trend: '-1.1 min vs last week',
+            value: <>{displayNum}<span style={{ fontSize: '1.3rem', fontWeight: 400, marginLeft: 2 }}>{displayUnit}</span></>,
+            trend: trendStr,
           },
         ].map((k, i) => (
           <Grid key={i} item xs={12} sm={6} md={4}>
