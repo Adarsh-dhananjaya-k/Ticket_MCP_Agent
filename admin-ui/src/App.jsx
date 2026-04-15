@@ -40,6 +40,7 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 const SUPER_ADMINS = [
   'ai.vijeth@laratechconsulting.com',
   'ai.royson@laratechconsulting.com',
+  'ai.samuel@laratechconsulting.com'
 ];
 
 // ─── THEMES ───────────────────────────────────────────────────────────────────
