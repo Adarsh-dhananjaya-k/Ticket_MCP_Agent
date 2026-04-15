@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 # Import the bot logic and DB
 from agent.teams_bot import ITSMBot
-from agent.db import init_db, get_recent_logs
+from agent.db import init_db, get_recent_logs, get_admin_stats, get_sessions
 from agent.blob_storage import EntraIdBlobStorage
 
 load_dotenv()
@@ -145,6 +145,20 @@ async def api_get_logs(req: web.Request) -> web.Response:
     logs = get_recent_logs(100)
     return web.json_response(logs)
 
+async def api_get_stats(req: web.Request) -> web.Response:
+    stats = get_admin_stats()
+    return web.json_response(stats)
+
+async def api_get_sessions(req: web.Request) -> web.Response:
+    query = req.rel_url.query.get("q")
+    limit_param = req.rel_url.query.get("limit")
+    try:
+        limit = int(limit_param) if limit_param else 1000
+    except ValueError:
+        limit = 1000
+    sessions = get_sessions(limit=limit, query=query)
+    return web.json_response({"sessions": sessions})
+
 async def api_get_config(req: web.Request) -> web.Response:
     try:
         with open("mcp_config.json", "r") as f:
@@ -186,6 +200,8 @@ else:
 
 # --- BACKEND API ROUTES ---
 app.router.add_get("/api/admin/logs", api_get_logs)
+app.router.add_get("/api/admin/stats", api_get_stats)
+app.router.add_get("/api/admin/sessions", api_get_sessions)
 app.router.add_get("/api/admin/config", api_get_config)
 app.router.add_post("/api/admin/config", api_update_config)
 
