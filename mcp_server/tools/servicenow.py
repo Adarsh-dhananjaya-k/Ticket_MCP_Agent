@@ -285,14 +285,31 @@ def update_incident(ticket_id, action_by_email=None, **kwargs):
             # E. The VIP List
             authorized_users =[caller_sysid, assigned_sysid, group_manager_sysid, admin_sysid]
             # Clean up the list to remove empty values
-            authorized_users =[u for u in authorized_users if u]
+            authorized_users = [u for u in authorized_users if u]
 
             # F. The Final Check
-            if requester_sysid not in authorized_users:
+            is_subscribing = kwargs.get("add_to_watchlist") is True
+
+            # If they aren't authorized, BUT they are just trying to subscribe to updates, let them pass!
+            if requester_sysid not in authorized_users and not is_subscribing:
                 return f"❌ Permission Denied: You ({action_by_email}) are not authorized to modify {ticket_id}. Only the Caller, Assigned Agent, Team Manager, or System Admin can do this."
         # -------------------------------------------
 
         payload = {}
+
+        # 🚀 NEW: Add to Watchlist Logic
+        if kwargs.get("add_to_watchlist") and requester_sysid:
+            current_wl = ticket_data.get("watch_list", "")
+            if isinstance(current_wl, dict): 
+                current_wl = current_wl.get("value", "") or ""
+                
+            # Safely split existing watchlist and append the new user if they aren't already on it
+            wl_items =[x.strip() for x in str(current_wl).split(",") if x.strip()]
+            if str(requester_sysid) not in wl_items:
+                wl_items.append(str(requester_sysid))
+            
+            # Join the list back together into a comma-separated string
+            payload["watch_list"] = ",".join(wl_items)
         
         if "status" in kwargs:
             target_state = SN_STATE_MAP.get(str(kwargs["status"]).lower(), "2")
@@ -376,6 +393,90 @@ def check_approval_status(ticket_id):
     if approval_state == 'approved':
         return f"Status: approved. The ticket is currently assigned to: {actual_assignee}."
     return f"Status: {approval_state}."
+
+def upload_user_image_to_ticket(ticket_id: str, caller_email: str) -> str:
+    """Finds the user's latest uploaded image and attaches it to the ServiceNow ticket."""
+    if not is_configured(): return "❌ Config Error"
+    
+    # 1. Find the temporary image
+    safe_email = caller_email.replace("@", "_").replace(".", "_")
+    temp_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "temp_images"))
+    temp_path = os.path.join(temp_dir, f"{safe_email}_latest.png")
+    
+    if not os.path.exists(temp_path):
+        return f"No recent images found for {caller_email} to upload."
+    
+    # 2. Get the actual SysID of the incident (Required by SNOW Attachment API)
+    inc_sys_id = get_sysid_by_query("incident", f"number={ticket_id}")
+    if not inc_sys_id:
+        return f"❌ Ticket {ticket_id} not found."
+        
+    # 3. Upload to ServiceNow Attachment API
+    url = f"https://{INSTANCE}/api/now/attachment/file"
+    params = {
+        "table_name": "incident",
+        "table_sys_id": inc_sys_id,
+        "file_name": "User_Screenshot.png"
+    }
+    
+    # SNOW requires the binary data in the body and the correct Content-Type header
+    headers = {"Content-Type": "image/png", "Accept": "application/json"}
+    
+    try:
+        with open(temp_path, "rb") as f:
+            file_data = f.read()
+            
+        res = requests.post(url, auth=HTTPBasicAuth(USER, PWD), params=params, headers=headers, data=file_data)
+        
+        if res.status_code == 201:
+            os.remove(temp_path) # Clean up the file so we don't attach it to future tickets!
+            return f"✅ Image successfully attached to {ticket_id}."
+        else:
+            return f"❌ Failed to attach image. SNOW responded: {res.text}"
+            
+    except Exception as e:
+        return f"❌ Attachment Error: {str(e)}"
+    
+def search_active_issues(keyword: str):
+    """Searches the entire SNOW database for active/unresolved incidents matching a keyword."""
+    if not is_configured(): return "❌ Config Error"
+    
+    url = f"https://{INSTANCE}/api/now/table/incident"
+    
+    # active=true automatically filters out anything Resolved, Closed, or Canceled!
+    # LIKE allows us to search for the keyword anywhere in the short description.
+    query = f"active=true^short_descriptionLIKE{keyword}"
+    
+    params = {
+        "sysparm_query": query,
+        "sysparm_limit": 5, # We only need the top 5 most relevant active ones
+        "sysparm_display_value": "true",
+        "sysparm_fields": "number,short_description,state,assigned_to"
+    }
+    
+    try:
+        res = requests.get(url, auth=HTTPBasicAuth(USER, PWD), params=params)
+        data = res.json().get("result", [])
+        
+        if not data:
+            return "[]" # No active global issues found
+        
+        results =[]
+        for d in data:
+            assigned = d.get("assigned_to", "Unassigned")
+            if isinstance(assigned, dict): assigned = assigned.get("display_value", "Unassigned")
+            
+            results.append({
+                "ticket_id": d.get("number"),
+                "description": d.get("short_description"),
+                "state": d.get("state"),
+                "assigned_to": assigned
+            })
+            
+        return json.dumps(results)
+        
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 def test_connection():
     return "✅ Connected" if is_configured() else "❌ Not Configured"

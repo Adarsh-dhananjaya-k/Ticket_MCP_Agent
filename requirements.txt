@@ -12,5 +12,6 @@ botbuilder-core
 botbuilder-schema
 botbuilder-integration-aiohttp
 aiohttp
-azure-identity
 azure-storage-blob
+azure-keyvault-secrets
+msal
